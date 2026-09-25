@@ -1,0 +1,13 @@
+{
+  "name": "Material Orders",
+  "short_name": "Mat Orders",
+  "description": "Create material orders from the field.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5f8",
+  "theme_color": "#16335b",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
