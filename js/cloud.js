@@ -185,5 +185,54 @@
     });
   };
 
+  // ---------------------------------------------------------------- special (job) pricing books
+
+  // All books with their items: [{id, job_number, job_key, supplier, name, active, updated_at, items:[{item_key, price, ...}]}]
+  Cloud.listBooks = function () {
+    return client.from("price_books").select("id, job_number, job_keys, supplier, name, active, updated_at")
+      .order("job_number").then(must).then(function (books) {
+        if (!books.length) return books;
+        return client.from("price_book_items").select("book_id, item_key, item_name, unit, price").limit(50000).then(must)
+          .then(function (items) {
+            var byBook = {};
+            items.forEach(function (it) { (byBook[it.book_id] = byBook[it.book_id] || []).push(it); });
+            books.forEach(function (b) { b.items = byBook[b.id] || []; });
+            return books;
+          });
+      }, function (e) {
+        if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) { var err = new Error("setup"); err.setupMissing = true; throw err; }
+        throw e;
+      });
+  };
+
+  Cloud.saveBook = function (b) {
+    var row = { job_number: b.job_number.trim(), supplier: b.supplier, name: b.name || null, active: b.active !== false, updated_at: new Date().toISOString() };
+    var q = b.id ? client.from("price_books").update(row).eq("id", b.id) : client.from("price_books").insert(row);
+    return q.select("id").then(must).then(function (rows) { return rows[0].id; });
+  };
+
+  Cloud.deleteBook = function (id) {
+    return client.from("price_books").delete().eq("id", id).then(must);
+  };
+
+  // rows: [{item_key, item_name, unit, price}]
+  Cloud.upsertBookItems = function (bookId, rows) {
+    var now = new Date().toISOString();
+    var payload = rows.map(function (r) { return { book_id: bookId, item_key: r.item_key, item_name: r.item_name, unit: r.unit, price: r.price, updated_at: now }; });
+    var chain = Promise.resolve();
+    for (var i = 0; i < payload.length; i += 500) {
+      (function (chunk) {
+        chain = chain.then(function () { return client.from("price_book_items").upsert(chunk, { onConflict: "book_id,item_key" }).then(must); });
+      })(payload.slice(i, i + 500));
+    }
+    return chain.then(function () {
+      return client.from("price_books").update({ updated_at: now }).eq("id", bookId).then(must);
+    });
+  };
+
+  Cloud.deleteBookItem = function (bookId, itemKey) {
+    return client.from("price_book_items").delete().eq("book_id", bookId).eq("item_key", itemKey).then(must);
+  };
+
   window.Cloud = Cloud;
 })();

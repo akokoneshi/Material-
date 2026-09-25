@@ -194,6 +194,71 @@
       .filter(function (r) { return +r.qty > 0; })
       .sort(function (a, b) { return b.qty - a.qty; });
   }
+  // ---------------------------------------------------------------- special (job) pricing
+  // A job's price books override the regular price list for the items they contain.
+  function jobKey(j) { return String(j || "").trim().toUpperCase(); }
+  function getBooks() { return store.get("books", []); }
+  // A book can cover several jobs: "3479, 3557, 3375".
+  function bookJobs(b) { return String(b.job_number || "").split(",").map(jobKey).filter(Boolean); }
+  var bookIdx = null;
+  function bookIndex() {
+    if (bookIdx) return bookIdx;
+    bookIdx = {};
+    // If an item is in more than one of a job's books, the lowest price wins.
+    getBooks().filter(function (b) { return b.active; }).forEach(function (b) {
+      bookJobs(b).forEach(function (jk) {
+        var m = bookIdx[jk] = bookIdx[jk] || {};
+        (b.items || []).forEach(function (it) {
+          var cur = m[it.item_key];
+          if (!cur || +it.price < cur.price) m[it.item_key] = { price: +it.price, book: b.name || (b.supplier + " job pricing"), bookId: b.id };
+        });
+      });
+    });
+    return bookIdx;
+  }
+  function setBooks(b) { store.set("books", b); bookIdx = null; }
+  function refreshBooks() {
+    if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    return Cloud.listBooks().then(function (b) { setBooks(b); store.set("booksSetupMissing", false); }, function (e) {
+      if (e && e.setupMissing) store.set("booksSetupMissing", true);
+    });
+  }
+  function specialFor(job, itemKey) { var m = bookIndex()[jobKey(job)]; return (m && m[itemKey]) || null; }
+  function jobHasBooks(job, supplier) {
+    var k = jobKey(job);
+    return getBooks().some(function (b) { return b.active && bookJobs(b).indexOf(k) >= 0 && (!supplier || b.supplier === supplier); });
+  }
+  // Effective price for an item on an order: job price if one of the job's books has it, else the regular price.
+  function priceFor(o, it) {
+    var sp = o ? specialFor(o.jobNumber, it.key) : null;
+    return sp ? { price: sp.price, special: true, book: sp.book, regular: it.price } : { price: it.price, special: false, regular: it.price };
+  }
+  // Keep draft orders on current pricing (e.g. a job book was added after the draft was started).
+  function repriceOrder(o) {
+    if (!o || o.status !== "draft") return false;
+    var changed = false;
+    o.lines.forEach(function (l) {
+      if (isShop(l) || l.custom) return;
+      var it = BY_KEY[l.key];
+      if (!it) return;
+      var p = priceFor(o, it);
+      if (l.price !== p.price || !!l.special !== p.special) {
+        l.price = p.price;
+        l.special = p.special;
+        l.book = p.special ? p.book : undefined;
+        changed = true;
+      }
+    });
+    if (changed) putOrder(o);
+    return changed;
+  }
+  function jobPriceHtml(p, unit) {
+    return p.special
+      ? '<span class="job-price">Job price</span> ' + fmtMoney(p.price) + ' <span class="unit">/ ' + esc(unit) + "</span>" +
+        (p.regular > 0 && p.regular !== p.price ? ' <s class="reg">' + fmtMoney(p.regular) + "</s>" : "")
+      : priceHtml(p.price, unit);
+  }
+
   function refreshAccess() {
     if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
     var before = JSON.stringify(access());
@@ -273,7 +338,8 @@
         return Promise.all([
           Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ }),
           Cloud.getMyAccess().then(function (a) { store.set("access", a); }, function () { /* keep cached */ }),
-          refreshStock()
+          refreshStock(),
+          refreshBooks()
         ]);
       })
       .then(function () {
@@ -286,7 +352,8 @@
       .then(function () {
         sync.running = false;
         if (sync.again) { sync.again = false; scheduleSync(300); }
-        if (state.view === "home" || state.view === "history" || state.view === "shop") render();
+        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "book") render();
+        else if ((state.view === "build" || state.view === "review") && repriceOrder(currentOrder())) render();
         else if (state.view === "send") render();
         else if (state.view === "review") refreshOrderNumber();
       });
@@ -481,6 +548,7 @@
       '<button class="btn" data-action="history">' + ICON.list + "Order History</button>" +
       (Cloud.enabled ? '<button class="btn" data-action="shop">' + ICON_SHOP + "Shop Stock</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
+      (isAdmin() ? '<button class="btn" data-action="pricing">' + ICON.tag + "Special Pricing</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
     h += setupBanner();
@@ -594,13 +662,14 @@
     store.set("recentJobs", recent.slice(0, 6));
     state.draft = null;
     go("build", { orderId: order.id, mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" });
-    toast("Order started for Job " + jobNumber);
+    toast(jobHasBooks(jobNumber, supplier) ? "Job " + jobNumber + ": special pricing applied" : "Order started for Job " + jobNumber);
   }
 
   // ----- build (search / browse) and lookup share this
   function scopeItems() {
     if (state.view === "shop-add") { var m = materials(); if (!m._indexed) { S.buildIndex(m); m._indexed = true; } return m; }
     if (state.view === "lookup") return state.lookupSupplier ? BY_SUPPLIER[state.lookupSupplier] : ITEMS;
+    if (state.view === "book-add") { var bk = currentBook(); return bk ? BY_SUPPLIER[bk.supplier] || [] : []; }
     var o = currentOrder();
     return o ? BY_SUPPLIER[o.supplier] || [] : [];
   }
@@ -608,10 +677,14 @@
   VIEWS.build = function () {
     var o = currentOrder();
     if (!o) return VIEWS.home();
+    repriceOrder(o);
+    o = currentOrder();
     var h = topbar("Job " + o.jobNumber, o.supplier + (o.jobName ? " · " + o.jobName : ""),
       backBtn("home", "Home"),
       '<button class="icon-btn" data-action="review" aria-label="Review order">Review</button>');
-    h += '<main class="page has-cartbar">' + finderHtml() + "</main>";
+    h += '<main class="page has-cartbar">' +
+      (jobHasBooks(o.jobNumber, o.supplier) ? '<div class="job-pricing-note"><span class="job-price">Job pricing</span> Special prices for Job ' + esc(o.jobNumber) + " are applied automatically.</div>" : "") +
+      finderHtml() + "</main>";
     h += cartBar(o);
     return h;
   };
@@ -697,6 +770,9 @@
     var inOrder = {};
     if (o) o.lines.forEach(function (l) { if (l.key) inOrder[l.key] = l; });
     var showSup = state.view === "lookup";
+    // Price context: the order being built, or the price book being edited.
+    var priceCtx = o || (state.view === "book-add" && currentBook() ? { jobNumber: currentBook().job_number } : null);
+    var priceForCtx = function (it) { return priceFor(priceCtx, it); };
     var adding = state.view === "shop-add";
     var h = '<ul class="results">';
     list.slice(0, state.shown).forEach(function (it) {
@@ -705,9 +781,12 @@
         '<button class="r-main" data-action="item" data-key="' + esc(it.key) + '">' +
         '<div class="r-name">' + esc(it.name) + "</div>" +
         '<div class="r-sub">' + (showSup ? '<span class="sup-tag">' + esc(it.supplier) + "</span> · " : "") + esc(it.category) + (it.model ? " · #" + esc(it.model) : "") + "</div>" +
-        (it.material ? '<div class="r-sub">Sold by the ' + esc(it.unit) + (it.count > 1 ? " · " + it.count + " price-list items" : "") + "</div>" : '<div class="r-price">' + priceHtml(it.price, it.unit) + "</div>") + shopBadge(it) + "</button>";
+        (it.material ? '<div class="r-sub">Sold by the ' + esc(it.unit) + (it.count > 1 ? " · " + it.count + " price-list items" : "") + "</div>"
+          : '<div class="r-price">' + (priceCtx ? jobPriceHtml(priceForCtx(it), it.unit) : priceHtml(it.price, it.unit)) + "</div>") + shopBadge(it) + "</button>";
       if (adding) {
         h += '<button class="r-add" data-action="item" data-key="' + esc(it.key) + '" aria-label="Add to shop stock"><span class="plus">+</span><small>Stock</small></button>';
+      } else if (state.view === "book-add") {
+        h += '<button class="r-add" data-action="item" data-key="' + esc(it.key) + '" aria-label="Set job price"><span class="plus">$</span><small>Price</small></button>';
       } else if (o) {
         h += '<button class="r-add" data-action="item" data-key="' + esc(it.key) + '" aria-label="' + (line ? "Change quantity" : "Add to order") + '">' +
           (line ? "<span>" + esc(fmtQty(line.qty)) + "</span><small>" + esc(it.unit) + "</small><small>Edit</small>" : '<span class="plus">+</span><small>Add</small>') + "</button>";
@@ -912,6 +991,7 @@
       return;
     }
     if (state.view === "shop-add") { openStockSheet(itemRef(it)); return; }
+    if (state.view === "book-add") { openBookPriceSheet(currentBook(), it); return; }
     var o = currentOrder();
     var existing = o.lines.filter(function (l) { return l.key === key; })[0];
     // Required check: if we have this material in a shop, the crew must choose shop or supplier first.
@@ -978,15 +1058,19 @@
   function openSupplierQty(it, existing, checkedShop) {
     var key = it.key;
     var qty = existing ? existing.qty : "";
+    var p = priceFor(currentOrder(), it);
     openQtySheet({
       title: it.name,
       sub: it.category + (it.model ? " · #" + it.model : ""),
-      price: it.price, unit: it.unit, qty: qty, existing: !!existing,
+      note: p.special ? "Job price " + fmtMoney(p.price) + " / " + it.unit + (p.regular > 0 ? "  (regular " + fmtMoney(p.regular) + ")" : "") : "",
+      price: p.price, unit: it.unit, qty: qty, existing: !!existing,
       onSave: function (q) {
         var ord = currentOrder();
+        var pp = priceFor(ord, it);
         var l = ord.lines.filter(function (x) { return x.key === key; })[0];
         if (l) l.qty = q;
-        else ord.lines.push({ key: key, id: it.id, name: it.name, unit: it.unit, price: it.price, model: it.model, category: it.category, qty: q, shopChecked: !!checkedShop });
+        else ord.lines.push({ key: key, id: it.id, name: it.name, unit: it.unit, price: pp.price, special: pp.special, book: pp.special ? pp.book : undefined,
+          model: it.model, category: it.category, qty: q, shopChecked: !!checkedShop });
         putOrder(ord);
         toast((l ? "Updated: " : "Added: ") + fmtQty(q) + " " + it.unit);
       },
@@ -1087,6 +1171,8 @@
   VIEWS.review = function () {
     var o = currentOrder();
     if (!o) return VIEWS.home();
+    repriceOrder(o);
+    o = currentOrder();
     var h = topbar("Review Order", "Job " + o.jobNumber + " · " + o.supplier, backBtn("to-build", "Back to materials"));
     h += '<main class="page">';
     h += '<div class="card"><dl class="kv"><dt>Order #</dt><dd data-order-number>' + esc(orderNo(o)) + "</dd><dt>Supplier</dt><dd>" + esc(o.supplier) +
@@ -1167,6 +1253,7 @@
       '<div class="l-sub">' + (shop
         ? '<span class="div-tag">Div ' + esc(l.division) + "</span> " + (l.pulled ? "Pulled ✓" : "To be pulled from shop")
         : (l.custom ? "Not in price list" : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
+          (l.special ? '<span class="job-price">Job price</span> ' : "") +
           (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit)) + "</div></div>" +
       '<div class="l-ext">' + (shop ? "Shop" : l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
       (shop && l.pulled ? '<div class="l-controls"><b>' + esc(fmtQty(l.qty)) + " " + esc(l.unit) + "</b></div>" :
@@ -1682,6 +1769,527 @@
     });
   }
 
+  // ----- special pricing (admin)
+  function currentBook() { return getBooks().filter(function (b) { return b.id === state.bookId; })[0] || null; }
+
+  VIEWS.pricing = function () {
+    var h = topbar("Special Pricing", "Job price books", backBtn("home", "Home"), syncPill());
+    h += '<main class="page">';
+    if (!isAdmin()) return h + setupBanner() + '<div class="empty">Only an admin can manage special pricing.</div></main>';
+    if (store.get("booksSetupMissing", false)) {
+      h += '<div class="notice"><b>Database setup not finished.</b> Run <code>supabase/pricing.sql</code> once in Supabase (SQL Editor → New query → paste → Run), then reopen this screen.</div>';
+    }
+    h += '<p class="hint" style="margin-top:0">When an order is for a job listed here, items in that job\'s price books use the job price automatically. Everything else uses regular pricing.</p>';
+    h += '<div class="card"><h2 style="margin-top:0;font-size:18px">New price book</h2><form id="book-form">' +
+      '<div class="filters"><label class="field"><span>Job # <span class="req">*</span> <small style="font-weight:500;color:var(--muted)">(several: 3479, 3557)</small></span><input class="input" name="job" required autocomplete="off" placeholder="e.g. 2695"></label>' +
+      '<label class="field"><span>Supplier <span class="req">*</span></span><select class="input" name="supplier">' + SUPPLIERS.map(function (x) { return "<option>" + esc(x) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field full"><span>Name (optional)</span><input class="input" name="name" placeholder="e.g. Homans Yale pricebook 1.12.26"></label></div>' +
+      '<button class="btn primary block" type="submit">' + ICON.plus + "Create price book</button></form></div>";
+    var books = getBooks().slice().sort(function (a, b) { return a.job_number < b.job_number ? -1 : a.job_number > b.job_number ? 1 : a.supplier < b.supplier ? -1 : 1; });
+    h += "<h3>Price books (" + books.length + ")</h3>";
+    if (!books.length) h += '<div class="empty">No special pricing yet.</div>';
+    else {
+      h += '<div class="tile-list">';
+      books.forEach(function (b) {
+        h += '<button class="tile" data-action="open-book" data-id="' + esc(b.id) + '"><span class="job-badge">Job ' + esc(b.job_number) + '</span><div class="t-main"><div class="t-title">' + esc(b.supplier) + "</div>" +
+          '<div class="t-sub">' + esc(b.name || "") + '</div><div class="t-sub">' + (b.items || []).length.toLocaleString() + " items" + (b.active ? "" : " · <b>turned off</b>") + " · updated " + esc(fmtDate(b.updated_at)) + "</div></div>" +
+          '<span class="chev">›</span></button>';
+      });
+      h += "</div>";
+    }
+    return h + "</main>";
+  };
+  AFTER.pricing = function () {
+    var f = document.getElementById("book-form");
+    if (!f) return;
+    f.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var job = f.job.value.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean).join(", ");
+      if (!job) { f.job.focus(); return; }
+      var btn = f.querySelector("button");
+      btn.disabled = true;
+      Cloud.saveBook({ job_number: job, supplier: f.supplier.value, name: f.name.value.trim() }).then(function (id) {
+        return refreshBooks().then(function () { toast("Price book created"); go("book", { bookId: id }); });
+      }, function (ex) { btn.disabled = false; toast(ex.message || "Couldn't create the book"); });
+    });
+  };
+
+  VIEWS.book = function () {
+    var b = currentBook();
+    if (!b) return VIEWS.pricing();
+    var h = topbar("Job " + b.job_number + " · " + b.supplier, b.name || "Price book", backBtn("pricing", "Special pricing"));
+    var items = (b.items || []).map(function (x) { return { row: x, it: BY_KEY[x.item_key] }; });
+    h += '<main class="page"><div class="btn-row" style="margin-bottom:10px">' +
+      '<button class="btn primary" data-action="book-add">' + ICON.plus + "Add item</button>" +
+      '<button class="btn brand" data-action="book-import">Import Excel / CSV / PDF</button></div>' +
+      '<input type="file" id="book-file" accept=".xlsx,.xls,.csv,.pdf" hidden>' +
+      '<div class="card"><label class="toggle"><input type="checkbox" id="book-active"' + (b.active ? " checked" : "") + ">Use this price book for Job " + esc(b.job_number) + "</label>" +
+      '<div class="btn-row"><button class="btn" data-action="book-jobs">Change job #s</button><button class="btn" data-action="book-rename">Rename</button><button class="btn danger" data-action="book-delete">Delete book</button></div></div>';
+    h += '<div class="searchbar"><div class="search-wrap">' + ICON.search +
+      '<input class="search-input" id="book-q" type="search" autocomplete="off" placeholder="Search items in this book" value="' + esc(state.bookQuery || "") + '"></div></div>' +
+      '<div class="search-meta" style="margin-bottom:8px"><b>' + items.length.toLocaleString() + "</b> items with job pricing</div>" +
+      '<div id="book-items"></div></main>';
+    return h;
+  };
+  AFTER.book = function () {
+    var b = currentBook();
+    if (!b) return;
+    document.getElementById("book-active").addEventListener("change", function (e) {
+      var nb = { id: b.id, job_number: b.job_number, supplier: b.supplier, name: b.name, active: e.target.checked };
+      Cloud.saveBook(nb).then(refreshBooks).then(function () { toast(nb.active ? "Book turned on" : "Book turned off"); }, function (ex) { toast(ex.message); });
+    });
+    var q = document.getElementById("book-q");
+    q.addEventListener("input", function () { state.bookQuery = q.value; clearTimeout(searchTimer); searchTimer = setTimeout(renderBookItems, 140); });
+    document.getElementById("book-file").addEventListener("change", function (e) {
+      var f = e.target.files[0];
+      e.target.value = "";
+      if (f) importPriceFile(b, f);
+    });
+    renderBookItems();
+  };
+  function renderBookItems() {
+    var b = currentBook(), box = document.getElementById("book-items");
+    if (!b || !box) return;
+    var list = (b.items || []).map(function (x) {
+      var it = BY_KEY[x.item_key];
+      return { name: it ? it.name : x.item_name || x.item_key, category: it ? it.category : "", model: it ? it.model : "", row: x, it: it };
+    });
+    if ((state.bookQuery || "").trim()) { S.buildIndex(list); list = S.search(list, state.bookQuery).results; }
+    else list.sort(function (a, b2) { return a.name < b2.name ? -1 : 1; });
+    if (!list.length) { box.innerHTML = '<div class="empty">' + ((b.items || []).length ? "Nothing matches." : "No items yet. Add them one at a time or import the supplier's price sheet.") + "</div>"; return; }
+    box.innerHTML = '<ul class="results">' + list.slice(0, state.shown).map(function (x) {
+      var reg = x.it ? x.it.price : 0;
+      return '<li class="result"><button class="r-main" data-action="book-item" data-key="' + esc(x.row.item_key) + '"><div class="r-name">' + esc(x.name) + '</div><div class="r-sub">' + esc(x.category) + (x.model ? " · #" + esc(x.model) : "") + "</div>" +
+        '<div class="r-price"><span class="job-price">Job price</span> ' + fmtMoney(x.row.price) + ' <span class="unit">/ ' + esc(x.row.unit || (x.it && x.it.unit) || "") + "</span>" +
+        (reg > 0 ? ' <span class="unit">· regular ' + fmtMoney(reg) + "</span>" : "") + "</div></button></li>";
+    }).join("") + "</ul>" +
+      (list.length > state.shown ? '<button class="btn block more" data-action="book-more">Show more (' + (list.length - state.shown).toLocaleString() + ")</button>" : "");
+  }
+
+  VIEWS["book-add"] = function () {
+    var b = currentBook();
+    if (!b) return VIEWS.pricing();
+    return topbar("Add to price book", "Job " + b.job_number + " · " + b.supplier, backBtn("open-book-back", "Back to book")) +
+      '<main class="page"><p class="hint" style="margin-top:0">Find the item, then tap it to enter the job price.</p>' + finderHtml() + "</main>";
+  };
+  AFTER["book-add"] = function () { afterFinder(); };
+
+  function openBookPriceSheet(b, it) {
+    var existing = (b.items || []).filter(function (x) { return x.item_key === it.key; })[0];
+    var h = "<h2>" + esc(it.name) + '</h2><div class="hint" style="margin-top:-6px">' + esc(it.category) + (it.model ? " · #" + esc(it.model) : "") + "</div>" +
+      '<div style="font-weight:700">Regular price: ' + (it.price > 0 ? fmtMoney(it.price) : "TBD") + " / " + esc(it.unit) + "</div>" +
+      '<label class="field" style="margin-top:14px"><span>Job ' + esc(b.job_number) + " price per " + esc(it.unit) + '</span><input class="input huge" id="book-price" type="number" inputmode="decimal" min="0" step="any" value="' + (existing ? esc(existing.price) : "") + '"></label>' +
+      '<div class="btn-row">' + (existing ? '<button class="btn danger" id="bp-remove">Remove</button>' : '<button class="btn" data-action="close-sheet">Cancel</button>') +
+      '<button class="btn primary" id="bp-save">Save job price</button></div>';
+    openSheet(h, function (sheet) {
+      var inp = sheet.querySelector("#book-price");
+      setTimeout(function () { inp.focus(); inp.select(); }, 60);
+      sheet.querySelector("#bp-save").addEventListener("click", function (e) {
+        var v = parseFloat(inp.value);
+        if (!(v >= 0) || inp.value === "") { inp.focus(); toast("Enter a price"); return; }
+        e.target.disabled = true;
+        Cloud.upsertBookItems(b.id, [{ item_key: it.key, item_name: it.name, unit: it.unit, price: +v.toFixed(4) }]).then(refreshBooks).then(function () {
+          closeSheet(); toast("Job price saved"); render();
+        }, function (ex) { e.target.disabled = false; toast(ex.message || "Couldn't save"); });
+      });
+      var rm = sheet.querySelector("#bp-remove");
+      if (rm) rm.addEventListener("click", function () {
+        Cloud.deleteBookItem(b.id, it.key).then(refreshBooks).then(function () { closeSheet(); toast("Removed - regular price applies"); render(); }, function (ex) { toast(ex.message); });
+      });
+    });
+  }
+
+  // ----- price sheet import (Excel / CSV / text PDF)
+  function loadScript(src) {
+    return new Promise(function (res, rej) { var sc = document.createElement("script"); sc.src = src; sc.onload = res; sc.onerror = rej; document.head.appendChild(sc); });
+  }
+  function normCode(c) { return String(c == null ? "" : c).toUpperCase().replace(/[\s]+/g, ""); }
+  function parsePrice(v) {
+    if (typeof v === "number") return v;
+    var m = String(v == null ? "" : v).replace(/[$,\s]/g, "").match(/^\d+(\.\d+)?$/);
+    return m ? parseFloat(m[0]) : null;
+  }
+  function supplierIndex(supplier) {
+    var byModel = {}, byId = {}, byName = {};
+    (BY_SUPPLIER[supplier] || []).forEach(function (it) {
+      if (it.model) (byModel[normCode(it.model)] = byModel[normCode(it.model)] || []).push(it);
+      byId[normCode(it.id)] = [it];
+      (byName[it.name.toUpperCase().replace(/\s+/g, " ").trim()] = byName[it.name.toUpperCase().replace(/\s+/g, " ").trim()] || []).push(it);
+    });
+    function exact(c) { return byModel[c] || byId[c] || null; }
+    // Scanned/OCR'd PDFs mix up O/0 and I/1 (FIPCO121OAJ = FIPC01210AJ): try those swaps if the code doesn't match.
+    function fuzzy(c) {
+      var pos = [];
+      for (var i = 0; i < c.length; i++) if ("O0I1".indexOf(c[i]) >= 0) pos.push(i);
+      if (!pos.length || pos.length > 8) return null;
+      var swap = { O: "0", "0": "O", I: "1", "1": "I" };
+      for (var mask = 1; mask < (1 << pos.length); mask++) {
+        var arr = c.split("");
+        pos.forEach(function (p, k) { if (mask & (1 << k)) arr[p] = swap[arr[p]]; });
+        var hit = exact(arr.join(""));
+        if (hit) return hit;
+      }
+      return null;
+    }
+    return function (code, desc) {
+      var c = normCode(code);
+      return exact(c) || (desc ? byName[String(desc).toUpperCase().replace(/\s+/g, " ").trim()] : null) || (c.length >= 5 ? fuzzy(c) : null) || null;
+    };
+  }
+
+  // Spreadsheet: find the header row with a price column and a code column on each sheet; use the sheet that matches best.
+  function rowsFromWorkbook(wb, lookup) {
+    var best = null;
+    wb.SheetNames.forEach(function (name) {
+      var grid = window.XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "" });
+      for (var r = 0; r < Math.min(grid.length, 40); r++) {
+        var head = grid[r].map(function (c) { return String(c).trim().toLowerCase(); });
+        var pc = -1, cc = -1, dc = -1;
+        head.forEach(function (c, i) {
+          if (pc < 0 && /(special|job|net|contract|your)?\s*price|^cost$|^net$|sell/.test(c) && !/list|retail/.test(c)) pc = i;
+          if (cc < 0 && /^(product|item code|item #|item no|item number|part|part #|part number|sku|model|model number|model #|catalog|mfr|internal identifier)$/.test(c)) cc = i;
+          if (dc < 0 && /description|item name|^name$/.test(c)) dc = i;
+        });
+        if (pc < 0 || (cc < 0 && dc < 0)) continue;
+        var rows = [];
+        for (var k = r + 1; k < grid.length; k++) {
+          var g = grid[k], code = cc >= 0 ? g[cc] : "", desc = dc >= 0 ? g[dc] : "", raw = g[pc];
+          if (!String(code).trim() && !String(desc).trim()) continue;
+          rows.push({ code: String(code).trim(), desc: String(desc).trim(), price: parsePrice(raw), call: /call/i.test(String(raw)) });
+        }
+        var score = rows.filter(function (x) { return x.price != null && lookup(x.code, x.desc); }).length;
+        if (!best || score > best.score) best = { score: score, rows: rows, source: 'sheet "' + name + '"' };
+        break;
+      }
+    });
+    return best || { rows: [], source: "" };
+  }
+
+  // Quote-style PDFs: CODE (: description) / qty / UOM / [qty / UOM] / unit price / amount.
+  // Only lines where qty x unit price = amount (within 2%) are accepted, so garbled lines are skipped, not guessed.
+  var UOM_RE = /^(LF|FT|EA|EACH|SF|SQFT|RL|ROLL|BX|BOX|PK|CT|CTN|GAL|GA|LB|PC|PCS|SET|KT|KIT|CS|BG|BAG|SH|SHT|TB|TUBE|PR|LY|QT|PT|CN)$/i;
+  var NUM_RE = /^\$?\d{1,3}(,\d{3})*(\.\d+)?$|^\$?\d*\.?\d+$/;
+  // Works on words, not lines, so it copes with both one-value-per-line and one-row-per-line PDF text.
+  // An item starts at a word that is a known item code for this supplier (e.g. "FIPC01210AO" or "FIPC01510AO:").
+  function rowsFromQuoteText(text, lookup) {
+    var words = text.replace(/(\d) \.(\d)/g, "$1.$2").replace(/\f/g, " \f ").split(/[ \t\n\r]+/).filter(Boolean);
+    var num = function (t) { return parseFloat(t.replace(/[$,]/g, "")); };
+    var isCode = function (w) {
+      var c = w.replace(/:$/, "");
+      return /^[A-Z0-9][A-Z0-9\-\/.#]{3,}$/.test(c) && /[A-Z]/.test(c) && /\d/.test(c) && lookup(c) ? c : null;
+    };
+    var rows = [], skipped = [], pending = [];
+    for (var i = 0; i < words.length; i++) {
+      var code = isCode(words[i]);
+      if (!code) continue;
+      var chunk = [], j;
+      for (j = i + 1; j < words.length && j < i + 45 && !isCode(words[j]); j++) chunk.push(words[j]);
+      var found = null;
+      for (var k = 0; k < chunk.length && !found; k++) {
+        if (!UOM_RE.test(chunk[k])) continue;
+        var q = null;
+        for (var b2 = k - 1; b2 >= 0; b2--) if (NUM_RE.test(chunk[b2])) { q = num(chunk[b2]); break; }
+        var after = [];
+        for (var a = k + 1; a < chunk.length && after.length < 2; a++) {
+          if (UOM_RE.test(chunk[a])) break;
+          if (NUM_RE.test(chunk[a]) && !(a + 1 < chunk.length && UOM_RE.test(chunk[a + 1]))) after.push(num(chunk[a]));
+        }
+        if (q != null && after.length === 2 && Math.abs(q * after[0] - after[1]) <= Math.max(1, after[1] * 0.02)) {
+          found = { code: code, desc: "", price: after[0], unit: chunk[k].toUpperCase(), call: false };
+        }
+      }
+      if (found) rows.push(found); else pending.push({ code: code, at: i, qty: firstQty(chunk) });
+      i = j - 1;
+    }
+    recoverPagePrices(words, pending, rows, isCode);
+    pending.forEach(function (p) { if (!p.done) skipped.push(p.code); });
+    return { rows: rows, source: "quote PDF", unreadable: skipped };
+  }
+  // Quantity right before the first unit word after a code ("44 EA"), if there is one.
+  function firstQty(chunk) {
+    for (var k = 1; k < chunk.length; k++) if (UOM_RE.test(chunk[k]) && NUM_RE.test(chunk[k - 1])) return parseFloat(chunk[k - 1].replace(/[$,]/g, ""));
+    return null;
+  }
+  // Some PDFs separate a line's numbers from its item code:
+  //  (a) prices for a run of lines are printed together at the bottom of the page: "15 EA 7.639 114.59"
+  //  (b) the page is in columns: all codes, then all qtys, units, qtys, units, prices, amounts.
+  // Rows are only accepted when qty x price = amount.
+  function recoverPagePrices(words, pending, rows, isCode) {
+    if (!pending.length) return;
+    var num = function (t) { return parseFloat(t.replace(/[$,]/g, "")); };
+    var valid = function (q, p, a) { return q > 0 && Math.abs(q * p - a) <= Math.max(1, a * 0.02); };
+    // page boundaries
+    var pages = [], start = 0;
+    words.forEach(function (w, i) { if (w === "\f") { pages.push([start, i]); start = i + 1; } });
+    pages.push([start, words.length]);
+    pages.forEach(function (pg) {
+      var pend = pending.filter(function (p) { return p.at >= pg[0] && p.at < pg[1] && !p.done; });
+      if (!pend.length) return;
+      // (a) orphan "qty UOM price amount" groups on this page, matched in order by quantity
+      var tuples = [];
+      for (var i = pg[0]; i + 3 < pg[1]; i++) {
+        if (NUM_RE.test(words[i]) && UOM_RE.test(words[i + 1]) && NUM_RE.test(words[i + 2]) && NUM_RE.test(words[i + 3]) && valid(num(words[i]), num(words[i + 2]), num(words[i + 3])) &&
+            !(i + 4 < pg[1] && UOM_RE.test(words[i + 4]))) {
+          tuples.push({ at: i, q: num(words[i]), unit: words[i + 1].toUpperCase(), p: num(words[i + 2]) });
+        }
+      }
+      var used = {};
+      pend.forEach(function (p) {
+        if (p.qty == null) return;
+        for (var t = 0; t < tuples.length; t++) {
+          if (used[t] || tuples[t].at < p.at || tuples[t].q !== p.qty) continue;
+          used[t] = 1; p.done = true;
+          rows.push({ code: p.code, desc: "", price: tuples[t].p, unit: tuples[t].unit, call: false });
+          break;
+        }
+      });
+      // (b) column layout: numbers after the last code on the page
+      var left = pend.filter(function (p) { return !p.done; });
+      if (!left.length) return;
+      var last = left[left.length - 1].at, n = left.length, nums = [], units = [];
+      for (var k = last + 1; k < pg[1]; k++) {
+        // stop at the next item ("CODE :" or "CODE:"), known to the price list or not
+        if (isCode(words[k]) || words[k + 1] === ":" || (/:$/.test(words[k]) && /[A-Z]/.test(words[k]) && /\d/.test(words[k]))) break;
+        if (NUM_RE.test(words[k])) nums.push(num(words[k]));
+        else if (UOM_RE.test(words[k])) units.push(words[k].toUpperCase());
+      }
+      // Columns are qty, qty, price, amount (units aren't numbers), so use the last 4n numbers;
+      // anything before them (numbers inside the last description) is ignored.
+      if (nums.length >= 4 * n) {
+        var L = nums.length, qty = nums.slice(L - 4 * n, L - 3 * n), price = nums.slice(L - 2 * n, L - n), amt = nums.slice(L - n);
+        left.forEach(function (p, i) {
+          // (units column is often garbled in these, so the qty x price = amount check is what we rely on)
+          if (valid(qty[i], price[i], amt[i])) { p.done = true; rows.push({ code: p.code, desc: "", price: price[i], unit: "", call: false }); }
+        });
+      }
+    });
+  }
+
+  // Quotes with no item codes ("2,145  AEROFLEX 1-1/8X1 TUBE  $2.79  LF  $5,985.33"): match by description.
+  function rowsFromDescQuote(text) {
+    var re = /(?:^|\n)\s*([\d,]+)\s+(.+?)\s+\$([\d,]*\.\d+)\s+([A-Za-z]{2,4})\s+\$([\d,]*\.\d+)/g, m, rows = [];
+    while ((m = re.exec(text))) {
+      var qty = +m[1].replace(/,/g, ""), price = +m[3].replace(/,/g, ""), ext = +m[5].replace(/,/g, "");
+      if (Math.abs(qty * price - ext) > Math.max(1, ext * 0.03)) continue; // not a real priced line
+      rows.push({ code: "", desc: m[2].trim(), price: price, unit: m[4].toUpperCase(), byDesc: true });
+    }
+    return { rows: rows, source: "quote without item codes" };
+  }
+
+  // GIC-style quotes: "ILOCK 1-1/8 ID X 1" X 6' 54ft   3.664/ft   197.86" then "KFLEX #6RXLO100118" / "Pn: 28516".
+  function rowsFromUnitPriceText(text) {
+    var lines = text.split("\n").map(function (l) { return l.trim(); });
+    var re = /^(.*?)\s+([\d,]+(?:\.\d+)?)\s*([A-Za-z]{2,4})\s+([\d,]*\.?\d+)\s*\/\s*([A-Za-z]{2,4})\s+([\d,]+\.\d{2})\s*$/;
+    var rows = [];
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(re);
+      if (!m) continue;
+      var qty = +m[2].replace(/,/g, ""), price = +m[4].replace(/,/g, ""), ext = +m[6].replace(/,/g, "");
+      if (Math.abs(qty * price - ext) > Math.max(1, ext * 0.02)) continue;
+      var code = "", desc = m[1].trim();
+      for (var k = i + 1; k < Math.min(lines.length, i + 4); k++) {
+        if (re.test(lines[k])) break;
+        var c = lines[k].match(/#\s?([A-Z0-9][A-Z0-9\-\/.]{3,})/i);
+        if (c && !code) code = c[1];
+        else if (!/^Pn:|^\*|^\(/.test(lines[k]) && lines[k] && !c) desc += " " + lines[k];
+      }
+      rows.push({ code: code, desc: desc, price: price, unit: m[5].toUpperCase(), call: false, descFallback: true });
+    }
+    return { rows: rows, source: "quote PDF (unit prices)" };
+  }
+
+  // Material family and product type words, so "8X5 MW PC" can't match fiberglass pipe covering.
+  var FAMILIES = [
+    [/\b(FG|FBG|FIBERGLASS|FIBREGLASS|MICRO-?FLEX|MICRO-?LOK)\b/i, /fiberglass/i],
+    [/\b(MW|MINERAL|MIN WOOL|ROCKWOOL|ROXUL|PROROX)\b/i, /mineral/i],
+    [/\b(AEROFLEX|AEROCEL)\b/i, /aerocel|aeroflex/i],
+    [/\b(ARMAFLEX|ARMACELL|AP ARMAFLEX)\b/i, /armaflex|armacell/i],
+    [/\b(TPS|CALSIL|CAL SIL|T-?4000|T-?1200)\b/i, /calcium silicate|calsil|cal sil/i],
+    [/\b(FOAMGLAS|CELL(ULAR)? GLASS)\b/i, /cellular glass|foamglas/i],
+    [/\bPHENOLIC\b/i, /phenolic/i], [/\b(POLYISO|ISO)\b/i, /polyiso/i], [/\bSTYRO/i, /styrofoam/i],
+    [/\bPVC\b/i, /pvc/i], [/\b(ALUM|ALUMINUM)\b/i, /alumin/i], [/\b(SS|STAINLESS)\b/i, /stainless/i]
+  ];
+  function familyOk(desc, it) {
+    var hay = it.category + " " + it.name;
+    for (var i = 0; i < FAMILIES.length; i++) if (FAMILIES[i][0].test(desc)) return FAMILIES[i][1].test(hay);
+    return false; // unknown material: never auto-accept
+  }
+  function typeOk(desc, it) {
+    var fitting = /\b(90|45|ELL|ELBOW|TEE|FITTING|WELD\d*|CAP)\b|WELD90|WELD45/i.test(desc), pc = /\b(PC|PIPE|TUBE|P\/C)\b/i.test(desc);
+    if (fitting) return /^Fitting Covers/.test(it.category);
+    if (pc) return /^Pipe Covering/.test(it.category);
+    return true;
+  }
+  function matchByDescription(rows, supplier) {
+    var items = BY_SUPPLIER[supplier] || [];
+    if (!items._indexed) { S.buildIndex(items); items._indexed = true; }
+    var U = function (u) { u = String(u || "").toUpperCase(); return { FT: "LF", EACH: "EA" }[u] || u; };
+    return rows.map(function (r) {
+      var q = r.desc.replace(/(\d)\s*X\s*(\d)/gi, "$1 x $2").replace(/\bFG\b|\bFBG\b/gi, "fiberglass").replace(/\bPC\b/g, "pipe");
+      var dims = S.parseQuery(q).dims;
+      if (!dims.length) return { row: r, item: null, confident: false };
+      var cands = items.filter(function (it) {
+        if (U(it.unit) !== U(r.unit)) return false;
+        var d = S.itemDims(it.name);
+        return d.length === dims.length && dims.every(function (x, i) { return Math.abs(x.v - d[i].v) < 1e-6; });
+      });
+      var good = cands.filter(function (it) { return familyOk(r.desc, it) && typeOk(r.desc, it); });
+      var best = (good.length ? good : cands).slice().sort(function (a, b) {
+        var pa = a.price > 0 ? Math.abs(Math.log(r.price / a.price)) : 9, pb = b.price > 0 ? Math.abs(Math.log(r.price / b.price)) : 9;
+        return pa - pb;
+      })[0] || null;
+      var ratio = best && best.price > 0 ? r.price / best.price : 0;
+      return { row: r, item: best, confident: !!best && good.length > 0 && good.indexOf(best) >= 0 && ratio > 0.4 && ratio < 1.6 };
+    });
+  }
+
+  // Price-book PDFs: item codes are followed by their price (e.g. "JM1121FBG 1.67" or "... Call").
+  function rowsFromPdfText(text) {
+    var re = /(?:^|[^A-Za-z0-9])([A-Z0-9][A-Z0-9\-\/.#]{3,})\s+(\$?\d{1,5}(?:,\d{3})*\.\d{2}|Call)\b/g, m, seen = {}, rows = [];
+    while ((m = re.exec(text))) {
+      if (seen[m[1]]) continue;
+      seen[m[1]] = 1;
+      rows.push({ code: m[1], desc: "", price: m[2] === "Call" ? null : parsePrice(m[2]), call: m[2] === "Call" });
+    }
+    return { rows: rows, source: "PDF" };
+  }
+
+  function readPdfText(file) {
+    return import(new URL("js/vendor/pdfjs/pdf.min.mjs", location.href).href).then(function (pdfjs) {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL("js/vendor/pdfjs/pdf.worker.min.mjs", location.href).href;
+      return file.arrayBuffer().then(function (buf) { return pdfjs.getDocument({ data: buf }).promise; }).then(function (doc) {
+        var pages = [];
+        for (var i = 1; i <= doc.numPages; i++) pages.push(i);
+        return Promise.all(pages.map(function (n) {
+          return doc.getPage(n).then(function (pg) { return pg.getTextContent(); }).then(function (tc) {
+            return tc.items.map(function (x) { return x.str + (x.hasEOL ? "\n" : " "); }).join("");
+          });
+        })).then(function (t) { return t.join("\n\f\n"); });
+      });
+    });
+  }
+
+  function importPriceFile(b, file) {
+    var lookup = supplierIndex(b.supplier);
+    toast("Reading " + file.name + "…");
+    var parsed;
+    if (/\.pdf$/i.test(file.name)) {
+      parsed = readPdfText(file).then(function (t) {
+        if (!t.replace(/\s/g, "").length) throw new Error("This PDF is a scanned image with no text, so prices can't be read. Ask the supplier for Excel or a text PDF, or add items one at a time.");
+        // Try both layouts and keep whichever finds more of this supplier's items.
+        var score = function (r) { return r.rows.filter(function (x) { return x.price != null && lookup(x.code, x.desc); }).length; };
+        var a = rowsFromPdfText(t), q = rowsFromQuoteText(t, lookup), u = rowsFromUnitPriceText(t);
+        var best = [a, q, u].sort(function (x, y) { return score(y) - score(x); })[0];
+        if (u.rows.length > 10 && score(u) >= score(best) * 0.5 && u.rows.length > best.rows.length) best = u;
+        if (score(best) < 5) { var d = rowsFromDescQuote(t); if (d.rows.length > score(best)) return d; }
+        return best;
+      });
+    } else {
+      parsed = (window.XLSX ? Promise.resolve() : loadScript("js/vendor/xlsx.full.min.js")).then(function () { return file.arrayBuffer(); })
+        .then(function (buf) { return rowsFromWorkbook(window.XLSX.read(buf, { type: "array" }), lookup); });
+    }
+    parsed.then(function (res) {
+      if (res.rows.length && res.rows[0].byDesc) { previewDescImport(b, file, res); return; }
+      var mr = matchRows(res, lookup, b.supplier), matched = mr.matched, unmatched = mr.unmatched, calls = mr.calls,
+        wrongUnit = mr.wrongUnit, suspicious = mr.suspicious, dupes = mr.dupes;
+      var rows = Object.keys(matched).map(function (k) { return matched[k]; });
+      // PDFs pick up stray words that look like codes; only list unmatched rows that look like real item codes.
+      var realMiss = unmatched.filter(function (r) { return /\d/.test(r.code) || r.desc; });
+      var h = "<h2>Import prices for Job " + esc(b.job_number) + '</h2><div class="hint" style="margin-top:-6px">' + esc(file.name) + (res.source ? " · " + esc(res.source) : "") + "</div>" +
+        '<div class="card" style="box-shadow:none"><div class="kv"><dt>Match ' + esc(b.supplier) + " items</dt><dd>" + rows.length.toLocaleString() + "</dd>" +
+        "<dt>Say \"Call\" (skipped)</dt><dd>" + calls + "</dd><dt>Not in price list</dt><dd>" + realMiss.length + "</dd>" +
+        (dupes ? "<dt>Listed more than once</dt><dd>" + dupes + " (lowest price kept)</dd>" : "") +
+        (wrongUnit.length ? "<dt>Different unit (skipped)</dt><dd>" + wrongUnit.length + "</dd>" : "") +
+        (suspicious.length ? "<dt>Need a manual check</dt><dd>" + suspicious.length + "</dd>" : "") + "</div></div>" +
+        (wrongUnit.length || suspicious.length ? '<details open><summary class="hint">Skipped - add these by hand if needed</summary><div class="hint" style="font-size:13px">' +
+          wrongUnit.concat(suspicious).slice(0, 60).map(esc).join("<br>") + "</div></details>" : "") +
+        (rows.length ? "" : '<div class="notice">No prices in this file matched ' + esc(b.supplier) + " items. Is this the right supplier's price sheet?</div>") +
+        (realMiss.length ? '<details><summary class="hint">Show items not in the price list</summary><div class="hint" style="font-size:13px">' +
+          realMiss.slice(0, 60).map(function (r) { return esc(r.code + (r.desc ? " - " + r.desc : "") + " · " + (r.price != null ? fmtMoney(r.price) : "")); }).join("<br>") +
+          (realMiss.length > 60 ? "<br>…" : "") + "</div></details>" : "") +
+        '<div class="btn-row" style="margin-top:14px"><button class="btn" data-action="close-sheet">Cancel</button>' +
+        '<button class="btn primary" id="do-import"' + (rows.length ? "" : " disabled") + ">Import " + rows.length.toLocaleString() + " prices</button></div>";
+      openSheet(h, function (sheet) {
+        sheet.querySelector("#do-import").addEventListener("click", function (e) {
+          e.target.disabled = true;
+          e.target.textContent = "Importing…";
+          Cloud.upsertBookItems(b.id, rows).then(refreshBooks).then(function () {
+            closeSheet(); toast(rows.length.toLocaleString() + " job prices imported"); render();
+          }, function (ex) { e.target.disabled = false; e.target.textContent = "Import"; toast(ex.message || "Import failed"); });
+        });
+      });
+    }).catch(function (ex) { alert(ex.message || "Couldn't read that file."); });
+  }
+
+  // Turn parsed rows into job prices: match to price-list items, skip different units / implausible prices,
+  // keep the lowest price for duplicates.
+  function matchRows(res, lookup, supplier) {
+    var matched = {}, unmatched = [], calls = 0, wrongUnit = [], suspicious = [], dupes = 0;
+    var U = function (u) { u = String(u || "").toUpperCase(); return { EACH: "EA", PC: "EA", PCS: "EA", FT: "LF", SQFT: "SF", ROLL: "RL", BOX: "BX", CTN: "CT", BAG: "BG", SHT: "SH", KIT: "KT", TUBE: "TB", GA: "GAL" }[u] || u; };
+    res.rows.forEach(function (r) {
+      if (r.call || r.price == null) { if (r.call) calls++; return; }
+      var its = r.code ? lookup(r.code, r.desc) : null;
+      if (!its && r.descFallback && supplier) {
+        var dm = matchByDescription([r], supplier)[0];
+        if (dm && dm.confident) its = [dm.item];
+      }
+      if (!its) { unmatched.push(r); return; }
+      its.forEach(function (it) {
+        // Quote priced in a different unit than the price list (e.g. per SF vs per roll): can't use it.
+        // Exception: "each" vs roll/gallon/box is usually the same package - accept when the price is close to the regular price.
+        if (r.unit && U(r.unit) !== U(it.unit)) {
+          var eachish = U(r.unit) === "EA" || U(it.unit) === "EA", ratio = it.price > 0 ? r.price / it.price : 0;
+          if (!(eachish && ratio > 0.6 && ratio < 1.4)) { wrongUnit.push(r.code + " (" + r.unit + " vs " + it.unit + ")"); return; }
+        }
+        // Guard against misread numbers: job price should be in the neighborhood of the regular price.
+        if (it.price > 0 && (r.price < it.price * 0.15 || r.price > it.price * 5)) { suspicious.push(r.code + " " + fmtMoney(r.price) + " vs regular " + fmtMoney(it.price)); return; }
+        var prev = matched[it.key];
+        if (prev) dupes++;
+        // Same item listed more than once: keep the lowest price.
+        if (!prev || r.price < prev.price) matched[it.key] = { item_key: it.key, item_name: it.name, unit: it.unit, price: +r.price.toFixed(4) };
+      });
+    });
+    (res.unreadable || []).forEach(function (c) {
+      var its = lookup(c);
+      if (its && !its.some(function (it) { return matched[it.key]; })) suspicious.push(c + " (line couldn't be read clearly)");
+    });
+    return { matched: matched, unmatched: unmatched, calls: calls, wrongUnit: wrongUnit, suspicious: suspicious, dupes: dupes };
+  }
+
+  // Preview for quotes matched by description: confident matches are ticked, the rest need a person to confirm.
+  function previewDescImport(b, file, res) {
+    var list = matchByDescription(res.rows, b.supplier);
+    var none = list.filter(function (x) { return !x.item; });
+    var withItem = list.filter(function (x) { return x.item; });
+    var h = "<h2>Import prices for Job " + esc(b.job_number) + '</h2><div class="hint" style="margin-top:-6px">' + esc(file.name) + " · " + esc(res.source) + "</div>" +
+      '<div class="notice">This quote has no item codes, so lines were matched by description. <b>Ticked</b> lines matched size, material and type; please check the rest before importing.</div>' +
+      '<div class="desc-list">' + withItem.map(function (x, i) {
+        return '<label class="desc-row' + (x.confident ? "" : " unsure") + '"><input type="checkbox" data-i="' + i + '"' + (x.confident ? " checked" : "") + ">" +
+          '<div><div><b>' + esc(x.row.desc) + "</b> · " + fmtMoney(x.row.price) + " / " + esc(x.row.unit) + "</div>" +
+          '<div class="hint" style="margin:0">→ ' + esc(x.item.name) + " (regular " + (x.item.price > 0 ? fmtMoney(x.item.price) : "TBD") + ")</div></div></label>";
+      }).join("") + "</div>" +
+      (none.length ? '<details><summary class="hint">' + none.length + " lines had no matching " + esc(b.supplier) + " item</summary><div class=\"hint\" style=\"font-size:13px\">" +
+        none.slice(0, 80).map(function (x) { return esc(x.row.desc + " · " + fmtMoney(x.row.price)); }).join("<br>") + "</div></details>" : "") +
+      '<div class="btn-row" style="margin-top:14px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="do-import">Import ticked prices</button></div>';
+    openSheet(h, function (sheet) {
+      var btn = sheet.querySelector("#do-import");
+      var count = function () { var n = sheet.querySelectorAll("[data-i]:checked").length; btn.textContent = "Import " + n + " prices"; btn.disabled = !n; };
+      sheet.addEventListener("change", count);
+      count();
+      btn.addEventListener("click", function () {
+        var rows = {};
+        sheet.querySelectorAll("[data-i]:checked").forEach(function (cb) {
+          var x = withItem[+cb.getAttribute("data-i")], prev = rows[x.item.key];
+          if (!prev || x.row.price < prev.price) rows[x.item.key] = { item_key: x.item.key, item_name: x.item.name, unit: x.item.unit, price: +x.row.price.toFixed(4) };
+        });
+        var arr = Object.keys(rows).map(function (k) { return rows[k]; });
+        btn.disabled = true;
+        Cloud.upsertBookItems(b.id, arr).then(refreshBooks).then(function () { closeSheet(); toast(arr.length + " job prices imported"); render(); },
+          function (ex) { btn.disabled = false; toast(ex.message || "Import failed"); });
+      });
+    });
+  }
+
   // ----- users & permissions (admin)
   VIEWS.users = function () {
     var h = topbar("Users & Permissions", "Admin", backBtn("settings", "Settings"));
@@ -1846,7 +2454,7 @@
     if (Cloud.enabled && Cloud.user) {
       h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:4px">' + esc(Cloud.user.email) + "</div>" +
         '<div class="hint" style="margin:0 0 10px">' + (isAdmin() ? "Admin" : canEditShop() ? "Can change shop stock" : "Crew member") + "</div>" +
-        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button>' : "") +
+        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button>' : "") +
         '<button type="button" class="btn" data-action="sign-out">Sign out</button></div></div>';
     }
     h += '<div class="card"><label class="field"><span>Your name (shown on orders)</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name || myName()) + '"></label>' +
@@ -1905,6 +2513,36 @@
     },
     "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
     "users": function () { go("users"); refreshAccess(); },
+    "pricing": function () { go("pricing"); refreshAccess(); refreshBooks().then(function () { if (state.view === "pricing") render(); }); },
+    "open-book": function (el) { go("book", { bookId: el.getAttribute("data-id"), bookQuery: "" }); },
+    "open-book-back": function () { go("book"); },
+    "book-add": function () { go("book-add", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
+    "book-import": function () { document.getElementById("book-file").click(); },
+    "book-more": function () { state.shown += PAGE * 4; renderBookItems(); },
+    "book-item": function (el) {
+      var key = el.getAttribute("data-key"), b = currentBook(), it = BY_KEY[key];
+      if (it) openBookPriceSheet(b, it);
+      else if (confirm("This item is no longer in the price list. Remove it from the book?")) {
+        Cloud.deleteBookItem(b.id, key).then(refreshBooks).then(render);
+      }
+    },
+    "book-jobs": function () {
+      var b = currentBook(), n = prompt("Job numbers this price book applies to (separate with commas):", b.job_number);
+      if (n == null) return;
+      n = n.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean).join(", ");
+      if (!n) return;
+      Cloud.saveBook({ id: b.id, job_number: n, supplier: b.supplier, name: b.name, active: b.active }).then(refreshBooks).then(function () { toast("Now applies to Job " + n); render(); }, function (ex) { toast(ex.message); });
+    },
+    "book-rename": function () {
+      var b = currentBook(), n = prompt("Price book name:", b.name || "");
+      if (n == null) return;
+      Cloud.saveBook({ id: b.id, job_number: b.job_number, supplier: b.supplier, name: n.trim(), active: b.active }).then(refreshBooks).then(render, function (ex) { toast(ex.message); });
+    },
+    "book-delete": function () {
+      var b = currentBook();
+      if (!confirm("Delete the " + b.supplier + " price book for Job " + b.job_number + "? Orders will go back to regular pricing for its items.")) return;
+      Cloud.deleteBook(b.id).then(refreshBooks).then(function () { toast("Price book deleted"); go("pricing"); }, function (ex) { toast(ex.message); });
+    },
     "user-remove": function (el) {
       var email = el.getAttribute("data-email");
       if (!confirm("Remove " + email + " from the list? Their shop permission goes away (their login still works - use 'Turn off access' to block them).")) return;

@@ -106,3 +106,29 @@ left out of the order total.
 ```
 node tests/search.test.js
 ```
+
+## Special (job) pricing
+
+Admins manage **price books** under **Special Pricing** (home screen). Each book belongs to one
+supplier and one or more jobs, e.g. "3479, 3557, 3375". When anyone builds an order for one of those jobs,
+every item that's in one of that job's books automatically uses the job price, with a green **Job price** tag.
+Everything else uses the regular price list. Crews don't have to do anything. If an item appears more than
+once, whether in one book or across a job's books, the **lowest** price wins. Draft orders re-price
+automatically when books change; sent orders keep the prices they were sent with.
+
+**Adding a book:** Special Pricing → New price book (job #s + supplier) → then either
+**Add item** (search and type the job price) or **Import Excel / CSV / PDF**. The importer reads:
+- supplier Excel/CSV/ODS price sheets (finds the item-code and price columns on the best sheet)
+- price-book PDFs where item codes are followed by prices (e.g. Homans pricebooks)
+- quote PDFs (DI, Homans, GIC). It uses the unit price and checks qty × price = amount, so garbled lines
+  are skipped, not guessed.
+- quotes with no item codes (e.g. SPI), matched by description. You tick which matches to keep; only
+  size + material + type matches start ticked.
+
+The importer never uses a price with a different unit than the price list, or one wildly off from the
+regular price. It lists those lines so you can add them by hand. Scanned (image-only) PDFs can't be read.
+Ask the supplier for a text PDF or Excel.
+
+**One-time setup:** run [`supabase/pricing.sql`](supabase/pricing.sql) (after `shop.sql`).
+The price books sent so far are pre-built in [`supabase/special-pricing/`](supabase/special-pricing/),
+one file per job group. Run each one in the SQL Editor.

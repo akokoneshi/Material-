@@ -365,3 +365,18 @@ h3 .ico-inline { color: var(--kim-red); }
 .user-card .t-title { font-weight: 700; font-size: 17px; }
 .user-card .t-sub { color: var(--muted); font-size: 14px; }
 .po-preview .po th { white-space: nowrap; }
+
+/* ---------- special (job) pricing ---------- */
+.job-price {
+  display: inline-block; background: #e6f4ea; color: #146c35; border: 1px solid #b7e0c4; border-radius: 6px;
+  padding: 1px 7px; font-size: 12px; font-weight: 800; letter-spacing: .02em; vertical-align: 1px;
+}
+.r-price s.reg, .reg { color: var(--muted); font-weight: 500; font-size: 14px; }
+.job-pricing-note { background: #f1faf4; border: 1px solid #cdebd6; color: #1f5132; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 14px; }
+.job-badge { flex: none; background: var(--kim-blue); color: #fff; border-radius: 8px; padding: 6px 9px; font-weight: 800; font-size: 14px; white-space: nowrap; }
+details summary { cursor: pointer; padding: 6px 0; }
+.desc-list { max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.desc-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.desc-row:last-child { border-bottom: 0; }
+.desc-row input { width: 22px; height: 22px; margin-top: 2px; accent-color: var(--kim-blue); flex: none; }
+.desc-row.unsure { background: var(--warn-bg); }
