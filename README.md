@@ -169,3 +169,13 @@ Models: Gemini uses `gemini-flash-latest` (Google's current Flash model); Claude
 thinking. Set the secret `INVOICE_MODEL` to use a different model. Note that on Gemini's free tier, Google may use
 the content you send to improve its products, and requests are rate-limited. A "busy / free-tier limit" message
 means wait a minute and tap **Re-run AI check**.
+
+## Price-list requests (admin approval)
+
+When someone adds an item manually that isn't in the price list, they can tick **Ask to add this to the price list**.
+The item goes on their order right away. The request goes to the admins' review queue (home screen: "N price-list
+requests to review"). The admin can edit any field (name, part #, supplier, unit, price, category) and **Approve**,
+which adds it to the searchable price list for everyone, or **Reject**. Approved items can still be edited later from
+**Recently reviewed**. Requesters don't see the status. Only admins can see requests.
+
+**One-time setup:** run [`supabase/catalog.sql`](supabase/catalog.sql) in the SQL Editor.

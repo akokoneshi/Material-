@@ -410,3 +410,6 @@ details summary { cursor: pointer; padding: 6px 0; }
 .il-grid small { display: block; color: var(--muted); font-weight: 600; font-size: 12px; }
 .tile.manual-add { margin: 6px 0 24px; border-style: dashed; border-color: var(--kim-blue); background: var(--kim-blue-tint); }
 .tile.manual-add > svg { width: 26px; height: 26px; color: var(--kim-blue); flex: none; }
+.request-toggle { align-items: flex-start; background: var(--kim-blue-tint); border-radius: 10px; padding: 10px 12px; margin: 0 0 14px; }
+.request-toggle small { display: block; font-weight: 500; color: var(--muted); font-size: 13px; }
+.req-card .t-sub { margin-bottom: 10px; }

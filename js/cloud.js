@@ -317,5 +317,48 @@
     return client.storage.from("invoices").download(path).then(must);
   };
 
+  // ---------------------------------------------------------------- price-list requests (admin approves)
+
+  Cloud.listCatalogItems = function () {
+    return fetchAll(function () { return client.from("catalog_items").select("*").eq("active", true).order("created_at").order("id"); });
+  };
+
+  Cloud.submitCatalogRequest = function (r) {
+    return client.from("catalog_requests").insert({
+      supplier: r.supplier, name: r.name, model: r.model || null, unit: r.unit || null,
+      price: r.price > 0 ? r.price : null, job_number: r.job_number || null, order_id: r.order_id || null
+    }).then(must);
+  };
+
+  // Admins get every request; everyone else only their own (enforced by the database).
+  Cloud.listCatalogRequests = function () {
+    return fetchAll(function () { return client.from("catalog_requests").select("*").order("created_at", { ascending: false }).order("id"); });
+  };
+
+  Cloud.approveCatalogRequest = function (req, item) {
+    var id = "KIM-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+    return client.from("catalog_items").insert({
+      id: id, supplier: item.supplier, name: item.name, model: item.model || null, unit: item.unit || "EA",
+      category: item.category || "Added Items", price: item.price > 0 ? item.price : 0
+    }).then(must).then(function () {
+      return client.from("catalog_requests").update({
+        status: "approved", item_id: id, review_note: item.note || null, reviewed_by: user.email, reviewed_at: new Date().toISOString()
+      }).eq("id", req.id).then(must);
+    }).then(function () { return id; });
+  };
+
+  Cloud.updateCatalogItem = function (id, f) {
+    return client.from("catalog_items").update({
+      name: f.name, model: f.model || null, unit: f.unit || "EA", category: f.category || "Added Items",
+      price: f.price > 0 ? f.price : 0, updated_at: new Date().toISOString()
+    }).eq("id", id).then(must);
+  };
+
+  Cloud.rejectCatalogRequest = function (req, note) {
+    return client.from("catalog_requests").update({
+      status: "rejected", review_note: note || null, reviewed_by: user.email, reviewed_at: new Date().toISOString()
+    }).eq("id", req.id).then(must);
+  };
+
   window.Cloud = Cloud;
 })();

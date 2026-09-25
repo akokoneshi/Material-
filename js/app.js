@@ -29,6 +29,35 @@
   var SUPPLIERS = CAT.suppliers.slice().sort(function (a, b) {
     return BY_SUPPLIER[b].length - BY_SUPPLIER[a].length;
   });
+  // Items an admin approved from price-list requests (catalog_items table), merged into the price list.
+  function addCatalogExtras(rows) {
+    var added = [];
+    (rows || []).forEach(function (r) {
+      var key = r.supplier + "|" + r.id;
+      var ex = BY_KEY[key];
+      if (ex && ex.added) {
+        // An admin edited an approved item: update it in place.
+        ex.name = r.name; ex.unit = String(r.unit || "EA").toUpperCase(); ex.category = r.category || "Added Items";
+        ex.price = +r.price || 0; ex.model = r.model || "";
+        if (indexed) S.buildIndex([ex]);
+        if (typeof MATERIALS !== "undefined") { MATERIALS = null; MAT_BY_KEY = {}; }
+        return;
+      }
+      if (ex || !BY_SUPPLIER[r.supplier]) return;
+      var it = { idx: ITEMS.length, name: r.name, unit: String(r.unit || "EA").toUpperCase(), category: r.category || "Added Items",
+        price: +r.price || 0, model: r.model || "", id: r.id, supplier: r.supplier, key: key, added: true };
+      ITEMS.push(it);
+      BY_KEY[key] = it;
+      BY_SUPPLIER[r.supplier].push(it);
+      added.push(it);
+    });
+    if (added.length) {
+      if (indexed) S.buildIndex(added);
+      if (typeof MATERIALS !== "undefined") { MATERIALS = null; MAT_BY_KEY = {}; }
+    }
+    return added.length;
+  }
+
   var indexed = false;
   function ensureIndex() {
     if (!indexed) { S.buildIndex(ITEMS); indexed = true; }
@@ -259,6 +288,28 @@
       : priceHtml(p.price, unit);
   }
 
+  function sendCatalogRequests() {
+    var q = store.get("pendingCatalogRequests", []);
+    if (!q.length || !Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    var chain = Promise.resolve();
+    q.forEach(function (r) {
+      chain = chain.then(function () {
+        return Cloud.submitCatalogRequest(r).then(function () {
+          store.set("pendingCatalogRequests", store.get("pendingCatalogRequests", []).filter(function (x) { return x !== r && JSON.stringify(x) !== JSON.stringify(r); }));
+        });
+      });
+    });
+    return chain.catch(function () { /* table missing or offline: keep queued */ });
+  }
+  function refreshCatalog() {
+    if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    return Promise.all([
+      Cloud.listCatalogItems().then(function (rows) { store.set("catalogExtra", rows); addCatalogExtras(rows); }, function () { /* keep cached */ }),
+      isAdmin() ? Cloud.listCatalogRequests().then(function (rows) { store.set("catalogRequests", rows); }, function () { /* keep cached */ }) : null
+    ]);
+  }
+  function pendingCatalogRequests() { return store.get("catalogRequests", []).filter(function (r) { return r.status === "pending"; }); }
+
   function refreshAccess() {
     if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
     var before = JSON.stringify(access());
@@ -335,13 +386,14 @@
 
     chain = chain.then(function () { return Cloud.pullOrders(); }).then(mergeRemote)
       .then(function () {
-        return Promise.all([
+        // Permissions first: what else we load depends on them (admin / invoice reviewer).
+        return Cloud.getMyAccess().then(function (a) { store.set("access", a); }, function () { /* keep cached */ }).then(function () { return Promise.all([
           Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ }),
-          Cloud.getMyAccess().then(function (a) { store.set("access", a); }, function () { /* keep cached */ }),
           refreshStock(),
           refreshBooks(),
-          refreshInvoices()
-        ]);
+          refreshInvoices(),
+          sendCatalogRequests().then(refreshCatalog)
+        ]); });
       })
       .then(function () {
         store.set("lastSync", new Date().toISOString());
@@ -353,7 +405,7 @@
       .then(function () {
         sync.running = false;
         if (sync.again) { sync.again = false; scheduleSync(300); }
-        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book" || state.view === "invoices") render();
+        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book" || state.view === "invoices" || state.view === "catalog-requests") render();
         else if ((state.view === "build" || state.view === "review") && repriceOrder(currentOrder())) render();
         else if (state.view === "send") render();
         else if (state.view === "review") refreshOrderNumber();
@@ -555,6 +607,8 @@
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
     h += setupBanner();
     var pulls = canEditShop() ? pendingPulls() : [];
+    var catPending = isAdmin() ? pendingCatalogRequests().length : 0;
+    if (catPending) h += '<button class="tile pull-alert" data-action="catalog-requests"><div class="t-main"><div class="t-title">' + ICON.tag + catPending + " price-list request" + (catPending === 1 ? "" : "s") + ' to review</div><div class="t-sub">Items the crew asked to add to the price list</div></div><span class="chev">›</span></button>';
     var invAttn = canReviewInvoices() ? getInvoices().filter(function (i) { return i.status === "mismatch" || i.status === "no_order" || i.status === "error"; }).length : 0;
     if (invAttn) h += '<button class="tile pull-alert" data-action="invoices"><div class="t-main"><div class="t-title">' + invAttn + " invoice" + (invAttn === 1 ? "" : "s") + ' need review</div><div class="t-sub">Pricing doesn\'t match the order, or no order was found</div></div><span class="chev">›</span></button>';
     if (pulls.length) h += '<button class="tile pull-alert" data-action="shop"><div class="t-main"><div class="t-title">' + ICON_SHOP + pulls.length + " order" + (pulls.length === 1 ? "" : "s") + ' waiting on shop material</div><div class="t-sub">Tap to pull and update stock</div></div><span class="chev">›</span></button>';
@@ -1159,6 +1213,7 @@
       '<div class="filters"><label class="field"><span>Quantity <span class="req">*</span></span><input class="input" id="c-qty" type="number" inputmode="decimal" min="0" step="any"></label>' +
       '<label class="field"><span>Unit</span><select class="input" id="c-unit">' + ["EA", "LF", "FT", "SF", "RL", "BX", "PK", "GAL", "SET"].map(function (u) { return "<option>" + u + "</option>"; }).join("") + "</select></label>" +
       '<label class="field full"><span>Price per unit <small style="font-weight:500;color:var(--muted)">(optional)</small></span><input class="input" id="c-price" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank if unknown"></label></div>' +
+      (Cloud.enabled ? '<label class="toggle request-toggle"><input type="checkbox" id="c-request"><span>Ask to add this to the price list<small>An admin reviews it before it\'s added for everyone.</small></span></label>' : "") +
       '<div class="btn-row"><button type="button" class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" type="submit">Add to Order</button></div></form>';
     openSheet(h, function (sheet) {
       var nm = sheet.querySelector("#c-name");
@@ -1171,13 +1226,24 @@
         if (!name) { sheet.querySelector("#c-name").focus(); return; }
         if (!(qty > 0)) { sheet.querySelector("#c-qty").focus(); toast("Enter a quantity"); return; }
         var o = currentOrder();
-        o.lines.push({
+        var req = sheet.querySelector("#c-request");
+        var line = {
           key: "custom:" + uid(), custom: true, id: "", name: name, unit: sheet.querySelector("#c-unit").value,
-          price: parseFloat(sheet.querySelector("#c-price").value) || 0, model: sheet.querySelector("#c-part").value.trim(), category: "Not in price list", qty: +qty.toFixed(3)
-        });
+          price: parseFloat(sheet.querySelector("#c-price").value) || 0, model: sheet.querySelector("#c-part").value.trim(), category: "Not in price list", qty: +qty.toFixed(3),
+          requested: !!(req && req.checked)
+        };
+        o.lines.push(line);
         putOrder(o);
+        if (line.requested) {
+          // Queued so it also works with no signal; sent with the next sync.
+          var q = store.get("pendingCatalogRequests", []);
+          q.push({ supplier: o.supplier, name: line.name, model: line.model, unit: line.unit, price: line.price, job_number: o.jobNumber, order_id: o.id });
+          store.set("pendingCatalogRequests", q);
+          scheduleSync(0);
+          toast("Added - sent to the admin to review for the price list");
+        }
         closeSheet();
-        toast("Added: " + name);
+        if (!line.requested) toast("Added: " + name);
         afterChange();
       });
     });
@@ -1268,7 +1334,7 @@
     return '<div class="line' + (shop ? " shop-line" : "") + '"><div><div class="l-name">' + esc(l.name) + "</div>" +
       '<div class="l-sub">' + (shop
         ? '<span class="div-tag">Div ' + esc(l.division) + "</span> " + (l.pulled ? "Pulled ✓" : "To be pulled from shop")
-        : (l.custom ? "Not in price list" + (l.model ? " · #" + esc(l.model) : "") : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
+        : (l.custom ? "Not in price list" + (l.model ? " · #" + esc(l.model) : "") + (l.requested ? " · requested for price list" : "") : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
           (l.special ? '<span class="job-price">Job price</span> ' : "") +
           (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit)) + "</div></div>" +
       '<div class="l-ext">' + (shop ? "Shop" : l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
@@ -2574,6 +2640,47 @@
     });
   }
 
+  // ----- price-list requests (admin reviews)
+  VIEWS["catalog-requests"] = function () {
+    var h = topbar("Price-list requests", "Review before items are added", backBtn("home", "Home"), syncPill());
+    h += '<main class="page">';
+    if (!isAdmin()) return h + '<div class="empty">Only an admin can review price-list requests.</div></main>';
+    var all = store.get("catalogRequests", []), pend = all.filter(function (r) { return r.status === "pending"; });
+    var units = CAT.units.slice().sort(), cats = CAT.categories.slice().sort();
+    h += '<datalist id="cat-list"><option value="Added Items">' + cats.map(function (c) { return '<option value="' + esc(c) + '">'; }).join("") + "</datalist>";
+    h += "<h3>Waiting for review (" + pend.length + ")</h3>";
+    if (!pend.length) h += '<div class="empty">Nothing waiting.</div>';
+    pend.forEach(function (r) {
+      h += '<div class="card req-card" data-req="' + esc(r.id) + '"><div class="t-sub">Requested by ' + esc((r.requested_by || "").split("@")[0]) + " · " + esc(fmtDate(r.created_at)) +
+        (r.job_number ? " · Job " + esc(r.job_number) : "") + "</div>" +
+        '<label class="field"><span>Item name</span><input class="input" data-f="name" value="' + esc(r.name) + '"></label>' +
+        '<div class="filters"><label class="field"><span>Part #</span><input class="input" data-f="model" value="' + esc(r.model || "") + '"></label>' +
+        '<label class="field"><span>Supplier</span><select class="input" data-f="supplier">' + SUPPLIERS.map(function (x) { return "<option" + (x === r.supplier ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
+        '<label class="field"><span>Unit</span><select class="input" data-f="unit">' + units.map(function (u) { return "<option" + (u === String(r.unit || "EA").toUpperCase() ? " selected" : "") + ">" + esc(u) + "</option>"; }).join("") + "</select></label>" +
+        '<label class="field"><span>Price (blank = TBD)</span><input class="input" data-f="price" type="number" inputmode="decimal" min="0" step="any" value="' + (r.price > 0 ? esc(r.price) : "") + '"></label>' +
+        '<label class="field full"><span>Category</span><input class="input" data-f="category" list="cat-list" value="Added Items"></label>' +
+        '<label class="field full"><span>Note (optional)</span><input class="input" data-f="note" placeholder="For your records"></label></div>' +
+        '<div class="btn-row"><button class="btn danger" data-action="req-reject" data-id="' + esc(r.id) + '">Reject</button>' +
+        '<button class="btn primary" data-action="req-approve" data-id="' + esc(r.id) + '">Approve &amp; add to price list</button></div></div>';
+    });
+    var done = all.filter(function (r) { return r.status !== "pending"; }).slice(0, 30);
+    if (done.length) {
+      h += "<h3>Recently reviewed</h3>" + done.map(function (r) {
+        var it = r.item_id ? BY_KEY[r.supplier + "|" + r.item_id] : null;
+        return '<div class="card"><div class="t-title">' + esc(it ? it.name : r.name) + " " + (r.status === "approved" ? '<span class="badge sent">Added</span>' : '<span class="badge">Rejected</span>') + "</div>" +
+          '<div class="t-sub">' + esc(r.supplier) + (it ? " · " + (it.price > 0 ? fmtMoney(it.price) : "Price TBD") + " / " + esc(it.unit) + (it.model ? " · #" + esc(it.model) : "") : "") +
+          " · by " + esc((r.requested_by || "").split("@")[0]) + " · " + esc(fmtDate(r.reviewed_at)) + (r.review_note ? " · " + esc(r.review_note) : "") + "</div>" +
+          (it ? '<button class="btn" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(it.key) + '">Edit item</button>' : "") + "</div>";
+      }).join("");
+    }
+    return h + "</main>";
+  };
+  function reqFields(id) {
+    var card = document.querySelector('[data-req="' + id + '"]'), v = {};
+    card.querySelectorAll("[data-f]").forEach(function (el) { v[el.getAttribute("data-f")] = el.value.trim(); });
+    v.price = parseFloat(v.price) || 0;
+    return v;
+  }
   // ----- users & permissions (admin)
   VIEWS.users = function () {
     var h = topbar("Users & Permissions", "Admin", backBtn("settings", "Settings"));
@@ -2799,6 +2906,40 @@
     },
     "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
     "users": function () { go("users"); refreshAccess(); },
+    "catalog-requests": function () { go("catalog-requests"); refreshCatalog().then(function () { if (state.view === "catalog-requests") render(); }); },
+    "req-approve": function (el) {
+      var id = el.getAttribute("data-id"), req = store.get("catalogRequests", []).filter(function (r) { return r.id === id; })[0], v = reqFields(id);
+      if (!v.name) { toast("Item name is required"); return; }
+      el.disabled = true;
+      Cloud.approveCatalogRequest(req, v).then(refreshCatalog).then(function () { toast("Added to the price list: " + v.name); render(); },
+        function (e) { el.disabled = false; toast(e.message || "Couldn't approve"); });
+    },
+    "catalog-edit": function (el) {
+      var it = BY_KEY[el.getAttribute("data-key")];
+      if (!it) return;
+      var units = CAT.units.slice().sort();
+      var h = "<h2>Edit price-list item</h2>" +
+        '<label class="field"><span>Item name</span><input class="input" id="ce-name" value="' + esc(it.name) + '"></label>' +
+        '<div class="filters"><label class="field"><span>Part #</span><input class="input" id="ce-model" value="' + esc(it.model || "") + '"></label>' +
+        '<label class="field"><span>Unit</span><select class="input" id="ce-unit">' + units.map(function (u) { return "<option" + (u === it.unit ? " selected" : "") + ">" + esc(u) + "</option>"; }).join("") + "</select></label>" +
+        '<label class="field"><span>Price (blank = TBD)</span><input class="input" id="ce-price" type="number" inputmode="decimal" min="0" step="any" value="' + (it.price > 0 ? esc(it.price) : "") + '"></label>' +
+        '<label class="field"><span>Category</span><input class="input" id="ce-cat" list="cat-list" value="' + esc(it.category) + '"></label></div>' +
+        '<p class="hint">Supplier: ' + esc(it.supplier) + '</p><div class="btn-row"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ce-save">Save changes</button></div>';
+      openSheet(h, function (sheet) {
+        sheet.querySelector("#ce-save").addEventListener("click", function (e) {
+          var f = { name: sheet.querySelector("#ce-name").value.trim(), model: sheet.querySelector("#ce-model").value.trim(), unit: sheet.querySelector("#ce-unit").value,
+            price: parseFloat(sheet.querySelector("#ce-price").value) || 0, category: sheet.querySelector("#ce-cat").value.trim() };
+          if (!f.name) { toast("Item name is required"); return; }
+          e.target.disabled = true;
+          Cloud.updateCatalogItem(it.id, f).then(refreshCatalog).then(function () { closeSheet(); toast("Item updated"); render(); }, function (ex) { e.target.disabled = false; toast(ex.message); });
+        });
+      });
+    },
+    "req-reject": function (el) {
+      var id = el.getAttribute("data-id"), req = store.get("catalogRequests", []).filter(function (r) { return r.id === id; })[0], v = reqFields(id);
+      if (!confirm("Reject this request? It won't be added to the price list.")) return;
+      Cloud.rejectCatalogRequest(req, v.note).then(refreshCatalog).then(function () { toast("Request rejected"); render(); }, function (e) { toast(e.message); });
+    },
     "invoices": function () { go("invoices"); refreshInvoices().then(function () { if (state.view === "invoices") render(); }); },
     "inv-upload": function () { document.getElementById("inv-file").click(); },
     "inv-filter": function (el) { state.invFilter = el.getAttribute("data-f"); render(); },
@@ -3078,6 +3219,7 @@
 
   // ---------------------------------------------------------------- start
   try { history.replaceState({ v: "home" }, ""); } catch (e) { /* ignore */ }
+  addCatalogExtras(store.get("catalogExtra", []));
   if (!Cloud.enabled) {
     render();
   } else {
