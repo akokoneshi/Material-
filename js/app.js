@@ -82,10 +82,21 @@
     var d = new Date();
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
-  function newOrderNumber() {
-    var seq = store.get("seq", 0) + 1;
-    store.set("seq", seq);
-    return "MO-" + today().replace(/-/g, "").slice(2) + "-" + String(seq).padStart(3, "0");
+  // Order numbers are per job: <job#>-001, <job#>-002, ...
+  // The counter is kept separately so numbers of deleted orders are never reused.
+  function newOrderNumber(jobNumber) {
+    var job = String(jobNumber).trim();
+    var jobKey = job.toUpperCase();
+    var counters = store.get("jobSeq", {});
+    var last = counters[jobKey] || 0;
+    getOrders().forEach(function (o) {
+      if (String(o.jobNumber).trim().toUpperCase() !== jobKey) return;
+      var m = String(o.number).match(/-(\d+)$/);
+      if (m && o.number.slice(0, -m[0].length).toUpperCase() === jobKey) last = Math.max(last, +m[1]);
+    });
+    counters[jobKey] = last + 1;
+    store.set("jobSeq", counters);
+    return job + "-" + String(last + 1).padStart(3, "0");
   }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   var toastTimer;
@@ -255,7 +266,7 @@
     var s = settings();
     var order = {
       id: uid(),
-      number: newOrderNumber(),
+      number: newOrderNumber(jobNumber),
       status: "draft",
       supplier: supplier,
       jobNumber: jobNumber,
@@ -880,7 +891,7 @@
       var blob = new Blob([orderCsv(o)], { type: "text/csv" });
       var a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = o.number + "_Job-" + o.jobNumber.replace(/[^\w-]+/g, "_") + ".csv";
+      a.download = "Material-Order_" + o.number.replace(/[^\w-]+/g, "_") + ".csv";
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
@@ -1085,7 +1096,7 @@
       });
       var copy = JSON.parse(JSON.stringify(o));
       copy.id = uid();
-      copy.number = newOrderNumber();
+      copy.number = newOrderNumber(copy.jobNumber);
       copy.status = "draft";
       copy.lines = lines;
       copy.needBy = "";

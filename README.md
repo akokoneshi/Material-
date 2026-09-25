@@ -20,7 +20,7 @@ A phone-friendly web app that lets field crews build material orders from the co
    You can choose whether the listed pricing appears on the order.
 5. **Create Order.** Email it to the supplier, share or text it, print or save it as a PDF,
    copy the text, or download a CSV.
-   Every order is saved in **Order History**. Use **Reorder (copy)** to start a new draft
+   Orders are numbered per job: `<job #>-001`, `-002`, `-003`… Every order is saved in **Order History**. Use **Reorder (copy)** to start a new draft
    from an old order at current prices.
 
 **Price Lookup** on the home screen searches every supplier's prices without starting an order.
