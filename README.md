@@ -48,6 +48,36 @@ Leave `js/config.js` empty to run in single-device mode, where orders are saved 
 
 Sent orders can't be deleted. Only drafts can.
 
+## Shop stock, users & permissions
+
+**Shop Stock** (home screen) lists material on hand in our shops by **Division**: 100, 200, 300, 400,
+450, 600 and 700. Stock is tracked by *material*, not by supplier. For example, "1/2" x 1" Fiberglass
+Pipe Covering · JM · ASJ" is one material, whether it was bought from CT-DI, CT-SPI or CT-Homans.
+The supplier only matters when an order is being created.
+
+- **Everyone** can see shop stock.
+- **People with shop permission** can add, remove or correct stock (*Add Material to Shop* → find
+  the material → pick a division → enter the quantity). Every change is logged with who made it, when,
+  and the job #.
+- **Admins** manage people under **Settings → Users & Permissions**: add someone, give or take away
+  shop permission, make them an admin, turn off their access, or reset their password.
+  `amandak@kimindustries.com` is the first admin.
+
+**Checking the shop is required when ordering.** When someone adds an item that we have in a shop, the
+app stops and shows what's on hand in each division. They must choose either **use it from the shop**
+(capped at what's available) or **order from the supplier**. Shop lines go on a separate "Pull from our
+shop" list. They never appear on the supplier's order, PDF or total. Once the order is sent, people with
+shop permission see it under **Waiting to be pulled**. Tapping **Mark pulled** takes the material out
+of stock.
+
+**One-time setup**
+1. **SQL Editor:** run [`supabase/shop.sql`](supabase/shop.sql) after `schema.sql`.
+2. *(Optional, lets admins create logins inside the app.)* **Edge Functions → Deploy a new function →
+   Via Editor**. Name it `admin-users`, paste in
+   [`supabase/functions/admin-users/index.ts`](supabase/functions/admin-users/index.ts), and click
+   **Deploy**. Without it, admins can still set permissions in the app, but logins have to be created
+   in **Authentication → Users**.
+
 ## Running / hosting
 
 The app is static files, with no server code and no build step.

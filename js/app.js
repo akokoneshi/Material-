@@ -85,6 +85,121 @@
     });
     return out;
   }
+  // ---------------------------------------------------------------- shop stock & permissions
+  var DIVISIONS = ["100", "200", "300", "400", "450", "600", "700"];
+  function getStock() { return store.get("stock", []); }
+  function access() { return store.get("access", { role: "user", can_edit_shop: false, blocked: false }); }
+  function isAdmin() { return Cloud.enabled && !!Cloud.user && access().role === "admin"; }
+  function canEditShop() { return Cloud.enabled && !!Cloud.user && (access().role === "admin" || !!access().can_edit_shop) && !access().blocked; }
+
+  // Shop stock is tracked per MATERIAL, not per supplier item: the same 1/2" x 1" JM fiberglass
+  // pipe covering bought from CT-DI, CT-SPI or CT-Homans is one material in the shop.
+  // Material = category (type + brand) + unit + sizes + fitting shape (90/45/tee...),
+  // or, for items without sizes, category + cleaned-up name.
+  // Words that make two same-size items different products (shape, jacket, finish, grade).
+  var VARIANT_WORDS = {
+    "90": 1, "45": 1, "180": 1, tee: 1, cap: 1, sw: 1, scr: 1, sr: 1, lr: 1, insert: 1, mitered: 1, valve: 1, flange: 1,
+    union: 1, coupling: 1, reducer: 1, block: 1, grooved: 1, plain: 1, asj: 1, ssl: 1, asph: 1, rc: 1, hot: 1, cold: 1,
+    saran: 1, "540": 1, "560": 1, b11: 1, bc: 1, pittwrap: 1, ultra: 1, max: 1, fsk: 1, pvc: 1, embossed: 1, smooth: 1,
+    stucco: 1, split: 1, slit: 1, unslit: 1, tube: 1, lock: 1, sheet: 1, roll: 1, clear: 1, black: 1, white: 1,
+    gray: 1, fire: 1, retardant: 1, reinf: 1, mil: 1
+  };
+  function unitNorm(u) { u = String(u || "").toUpperCase(); return u === "FT" ? "LF" : u; }
+  function materialKey(name, category, unit) {
+    var clean = String(name).replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+    var d = S.itemDims(name);
+    // Only merge across suppliers when the name leads with a size chain like 1/2" x 1" (pipe size x thickness).
+    if (d.length >= 2 && /^\d/.test(clean) && S.itemDims(clean.replace(/[a-wyz].*$/i, "")).length >= 2) {
+      var split = function (t) { return t.toLowerCase().replace(/self[\s-]*seal/g, "ssl").replace(/(\d)([a-z])/g, "$1 $2").split(/[^a-z0-9]+/); };
+      var v = {};
+      // Variant words anywhere in the name (including "(Ultra)"), plus numbers after the size, e.g. "4 MIL" vs "6 MIL".
+      split(name).forEach(function (w) { if (VARIANT_WORDS[w]) v[w] = 1; });
+      var afterSize = false;
+      split(clean).forEach(function (w) {
+        if (/^[a-wyz]/.test(w)) afterSize = true;
+        if (afterSize && /^\d+$/.test(w)) v[w] = 1;
+      });
+      // Fiberglass pipe covering is ASJ unless it says otherwise.
+      if (/^Pipe Covering > Fiberglass/.test(category) && !v.plain && !v.asj) v.asj = 1;
+      return "M|" + (category || "") + "|" + unitNorm(unit) + "|" + d.map(function (x) { return x.v + (x.u || "in"); }).join("x") + "|" + Object.keys(v).sort().join(",");
+    }
+    return "N|" + (category || "") + "|" + unitNorm(unit) + "|" + clean.toLowerCase().replace(/[^a-z0-9#\/.]+/g, " ").trim() + "|" +
+      (String(name).match(/\(([^)]*)\)/g) || []).join("").toLowerCase();
+  }
+  function itemMaterialKey(it) { if (!it._mkey) materials(); return it._mkey; }
+
+  // One entry per material across all suppliers (used when adding shop stock).
+  var MATERIALS = null, MAT_BY_KEY = {};
+  function materials() {
+    if (MATERIALS) return MATERIALS;
+    var raw = {};
+    ITEMS.forEach(function (it) {
+      var k = materialKey(it.name, it.category, it.unit);
+      (raw[k] = raw[k] || []).push(it);
+    });
+    // If one supplier has several items that land together but carry different model numbers
+    // (e.g. JM 300 vs 600 board with identical names), they're different products: split by model.
+    var groups = {};
+    Object.keys(raw).forEach(function (k) {
+      var list = raw[k], models = {}, clash = false;
+      list.forEach(function (it) {
+        var m = models[it.supplier] = models[it.supplier] || {};
+        m[it.model] = 1;
+        if (Object.keys(m).length > 1) clash = true;
+      });
+      list.forEach(function (it) {
+        it._mkey = clash ? k + "|#" + it.model : k;
+        if (clash) it._mmodel = it.model;
+        (groups[it._mkey] = groups[it._mkey] || []).push(it);
+      });
+    });
+    MATERIALS = Object.keys(groups).map(function (k) {
+      var list = groups[k];
+      // Friendliest description: the shortest name once box counts / ODs in brackets are removed.
+      var best = list.slice().sort(function (a, b) {
+        var ca = a.name.replace(/\([^)]*\)/g, "").length, cb = b.name.replace(/\([^)]*\)/g, "").length;
+        return ca - cb;
+      })[0];
+      var m = { key: k, name: k.charAt(0) === "M" ? materialName(k, best) : best.name.replace(/\s*\((?:\d+|[\d.]+)\)\s*/g, " ").replace(/\s+/g, " ").trim(), unit: unitNorm(best.unit), category: best.category, model: best._mmodel || "", material: true, count: list.length };
+      MAT_BY_KEY[k] = m;
+      return m;
+    });
+    MATERIALS.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+    return MATERIALS;
+  }
+
+  // Supplier-neutral description, e.g. 1/2" x 1" Fiberglass Pipe Covering · JM · ASJ
+  function materialName(k, it) {
+    var dims = S.itemDims(it.name).map(function (d) { return S.formatSize(d.v) + (d.u === "ft" ? "'" : '"'); }).join(" x ");
+    var parts = String(it.category || "").split(" > ");
+    var type = parts[0] || "", mat = parts[1] || "", brand = parts[2] || "";
+    if (/s$/.test(type) && !/ss$/.test(type)) type = type.replace(/ies$/, "y").replace(/([^s])s$/, "$1");
+    var variants = (k.split("|")[4] || "").split(",").filter(Boolean).map(function (w) { return w.toUpperCase(); });
+    var order = { "90": 0, "45": 1, "180": 2, TEE: 3 };
+    variants.sort(function (a, b) { return (order[a] != null ? order[a] : 9) - (order[b] != null ? order[b] : 9) || (a < b ? -1 : 1); });
+    return (dims + " " + (mat ? mat + " " : "") + type).trim() + (brand && brand !== "Fabricated" ? " · " + brand : brand ? " · Fabricated" : "") +
+      (variants.length ? " · " + variants.join(" ") : "") + (it._mmodel ? " · #" + it._mmodel : "");
+  }
+
+  var stockIdx = null;
+  function stockIndex() {
+    if (stockIdx) return stockIdx;
+    stockIdx = {};
+    getStock().forEach(function (r) { (stockIdx[r.item_key] = stockIdx[r.item_key] || []).push(r); });
+    return stockIdx;
+  }
+  function shopMatches(it) {
+    if (!Cloud.enabled) return [];
+    return (stockIndex()[it.material ? it.key : itemMaterialKey(it)] || [])
+      .filter(function (r) { return +r.qty > 0; })
+      .sort(function (a, b) { return b.qty - a.qty; });
+  }
+  function setStock(rows) { store.set("stock", rows); stockIdx = null; }
+  function refreshStock() {
+    if (!Cloud.enabled || !Cloud.user) return Promise.resolve();
+    return Cloud.listStock().then(setStock, function () { /* keep cached */ });
+  }
+
   function supplierEmails() { return Cloud.enabled ? store.get("supplierEmails", {}) : (settings().supplierEmails || {}); }
 
   // ---------------------------------------------------------------- sync
@@ -141,7 +256,11 @@
 
     chain = chain.then(function () { return Cloud.pullOrders(); }).then(mergeRemote)
       .then(function () {
-        return Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ });
+        return Promise.all([
+          Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ }),
+          Cloud.getMyAccess().then(function (a) { store.set("access", a); }, function () { /* keep cached */ }),
+          refreshStock()
+        ]);
       })
       .then(function () {
         store.set("lastSync", new Date().toISOString());
@@ -153,7 +272,7 @@
       .then(function () {
         sync.running = false;
         if (sync.again) { sync.again = false; scheduleSync(300); }
-        if (state.view === "home" || state.view === "history") render();
+        if (state.view === "home" || state.view === "history" || state.view === "shop") render();
         else if (state.view === "send") render();
         else if (state.view === "review") refreshOrderNumber();
       });
@@ -223,7 +342,11 @@
   function fmtMoney(n) { return money.format(n || 0); }
   function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
   function lineTotal(l) { return round2((+l.qty || 0) * (+l.price || 0)); }
-  function orderTotal(o) { return round2(o.lines.reduce(function (s, l) { return s + lineTotal(l); }, 0)); }
+  // Lines marked source:"shop" come out of our own shop stock and never go to the supplier.
+  function isShop(l) { return l.source === "shop"; }
+  function supLines(o) { return o.lines.filter(function (l) { return !isShop(l); }); }
+  function shopLines(o) { return o.lines.filter(isShop); }
+  function orderTotal(o) { return round2(supLines(o).reduce(function (s, l) { return s + lineTotal(l); }, 0)); }
   function fmtQty(q) { return String(+(+q).toFixed(3)); }
   function priceHtml(price, unit) {
     return price > 0
@@ -264,6 +387,7 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { t.classList.remove("show"); }, 1800);
   }
+  var ICON_SHOP = '<svg class="ico-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M3 9h18"/><path d="M9 20v-6h6v6"/></svg>';
   var ICON = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
@@ -341,7 +465,12 @@
       '<div class="btn-row">' +
       '<button class="btn" data-action="lookup">' + ICON.tag + "Price Lookup</button>" +
       '<button class="btn" data-action="history">' + ICON.list + "Order History</button>" +
+      (Cloud.enabled ? '<button class="btn" data-action="shop">' + ICON_SHOP + "Shop Stock</button>" : "") +
+      (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
       "</div></div>";
+    if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
+    var pulls = canEditShop() ? pendingPulls() : [];
+    if (pulls.length) h += '<button class="tile pull-alert" data-action="shop"><div class="t-main"><div class="t-title">' + ICON_SHOP + pulls.length + " order" + (pulls.length === 1 ? "" : "s") + ' waiting on shop material</div><div class="t-sub">Tap to pull and update stock</div></div><span class="chev">›</span></button>';
     if (drafts.length) {
       h += "<h3>" + (Cloud.enabled ? "Your drafts" : "Continue a draft") + '</h3><div class="tile-list">';
       drafts.slice(0, 5).forEach(function (o) { h += orderTile(o); });
@@ -455,6 +584,7 @@
 
   // ----- build (search / browse) and lookup share this
   function scopeItems() {
+    if (state.view === "shop-add") { var m = materials(); if (!m._indexed) { S.buildIndex(m); m._indexed = true; } return m; }
     if (state.view === "lookup") return state.lookupSupplier ? BY_SUPPLIER[state.lookupSupplier] : ITEMS;
     var o = currentOrder();
     return o ? BY_SUPPLIER[o.supplier] || [] : [];
@@ -473,16 +603,23 @@
   AFTER.build = function () { afterFinder(); };
 
   VIEWS.lookup = function () {
-    var h = topbar("Price Lookup", state.lookupSupplier || "All suppliers", backBtn("home", "Home"));
-    h += '<main class="page"><label class="field" style="margin-bottom:6px"><span>Supplier</span><select class="input" id="lookup-supplier">' +
+    var adding = state.view === "shop-add";
+    var h = adding ? topbar("Add Material to Shop", "Find it in the price list", backBtn("shop", "Shop stock"))
+      : topbar("Price Lookup", state.lookupSupplier || "All suppliers", backBtn("home", "Home"));
+    h += '<main class="page">' + (adding ? '<p class="hint" style="margin-top:0">Search or browse for the material (any supplier - it doesn\'t matter where it came from), then tap it to enter how much we have and which division it\'s in.</p>' + finderHtml() + "</main>" : "");
+    if (adding) return h;
+    h += '<label class="field" style="margin-bottom:6px"><span>Supplier</span><select class="input" id="lookup-supplier">' +
       '<option value="">All suppliers</option>' +
       SUPPLIERS.map(function (s) { return '<option' + (s === state.lookupSupplier ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") +
       "</select></label>" + finderHtml() + "</main>";
     return h;
   };
+  VIEWS["shop-add"] = function () { return VIEWS.lookup(); };
+  AFTER["shop-add"] = function () { AFTER.lookup(); };
   AFTER.lookup = function () {
     afterFinder();
-    document.getElementById("lookup-supplier").addEventListener("change", function (e) {
+    var sel = document.getElementById("lookup-supplier");
+    if (sel) sel.addEventListener("change", function (e) {
       state.lookupSupplier = e.target.value;
       state.browsePath = []; state.browseAll = false; state.sizeA = state.sizeB = "";
       render();
@@ -545,6 +682,7 @@
     var inOrder = {};
     if (o) o.lines.forEach(function (l) { if (l.key) inOrder[l.key] = l; });
     var showSup = state.view === "lookup";
+    var adding = state.view === "shop-add";
     var h = '<ul class="results">';
     list.slice(0, state.shown).forEach(function (it) {
       var line = inOrder[it.key];
@@ -552,8 +690,10 @@
         '<button class="r-main" data-action="item" data-key="' + esc(it.key) + '">' +
         '<div class="r-name">' + esc(it.name) + "</div>" +
         '<div class="r-sub">' + (showSup ? '<span class="sup-tag">' + esc(it.supplier) + "</span> · " : "") + esc(it.category) + (it.model ? " · #" + esc(it.model) : "") + "</div>" +
-        '<div class="r-price">' + priceHtml(it.price, it.unit) + "</div></button>";
-      if (o) {
+        (it.material ? '<div class="r-sub">Sold by the ' + esc(it.unit) + (it.count > 1 ? " · " + it.count + " price-list items" : "") + "</div>" : '<div class="r-price">' + priceHtml(it.price, it.unit) + "</div>") + shopBadge(it) + "</button>";
+      if (adding) {
+        h += '<button class="r-add" data-action="item" data-key="' + esc(it.key) + '" aria-label="Add to shop stock"><span class="plus">+</span><small>Stock</small></button>';
+      } else if (o) {
         h += '<button class="r-add" data-action="item" data-key="' + esc(it.key) + '" aria-label="' + (line ? "Change quantity" : "Add to order") + '">' +
           (line ? "<span>" + esc(fmtQty(line.qty)) + "</span><small>" + esc(it.unit) + "</small><small>Edit</small>" : '<span class="plus">+</span><small>Add</small>') + "</button>";
       }
@@ -564,6 +704,15 @@
       h += '<button class="btn block more" data-action="more">Show more (' + (list.length - state.shown).toLocaleString() + " more)</button>";
     }
     return h;
+  }
+
+  function shopBadge(it) {
+    var m = shopMatches(it);
+    if (!m.length) return "";
+    var byUnit = {};
+    m.forEach(function (r) { var u = r.unit || it.unit; byUnit[u] = (byUnit[u] || 0) + (+r.qty); });
+    return '<div class="r-shop">' + ICON_SHOP + "In shop: " + Object.keys(byUnit).map(function (u) { return fmtQty(byUnit[u]) + " " + esc(u); }).join(", ") +
+      " · Div " + m.map(function (r) { return esc(r.division); }).join(", ") + "</div>";
   }
 
   // ----- browse
@@ -737,7 +886,7 @@
   }
 
   function openItemSheet(key) {
-    var it = BY_KEY[key];
+    var it = state.view === "shop-add" ? MAT_BY_KEY[key] : BY_KEY[key];
     if (!it) return;
     if (state.view === "lookup") {
       openSheet('<h2>' + esc(it.name) + "</h2><dl class=\"kv\"><dt>Supplier</dt><dd>" + esc(it.supplier) + "</dd><dt>Price</dt><dd>" +
@@ -747,8 +896,72 @@
         '<button class="btn primary" data-action="order-from-lookup" data-supplier="' + esc(it.supplier) + '">Start order with ' + esc(it.supplier) + "</button></div>");
       return;
     }
+    if (state.view === "shop-add") { openStockSheet(itemRef(it)); return; }
     var o = currentOrder();
     var existing = o.lines.filter(function (l) { return l.key === key; })[0];
+    // Required check: if we have this material in a shop, the crew must choose shop or supplier first.
+    var matches = shopMatches(it);
+    if (matches.length && !existing) { openShopCheckSheet(it, matches); return; }
+    openSupplierQty(it, existing);
+  }
+
+  function itemRef(it) { return { key: it.key, name: it.name, unit: it.unit, category: it.category, model: it.model }; }
+
+  function openShopCheckSheet(it, matches) {
+    var o = currentOrder();
+    var claimed = {};
+    shopLines(o).forEach(function (l) { claimed[l.stockKey + "|" + l.division] = (claimed[l.stockKey + "|" + l.division] || 0) + (+l.qty || 0); });
+    var h = '<div class="shop-alert">' + ICON_SHOP + "<div><b>We have this in the shop</b><div>Use shop material first if it covers what you need.</div></div></div>" +
+      "<h2>" + esc(it.name) + "</h2>" + '<div class="tile-list">';
+    matches.forEach(function (r) {
+      var left = +r.qty - (claimed[r.item_key + "|" + r.division] || 0);
+      h += '<button class="tile shop-tile" data-shop-pick="' + esc(r.item_key + "|" + r.division) + '"' + (left > 0 ? "" : " disabled") + '>' +
+        '<span class="div-badge">Div ' + esc(r.division) + '</span><div class="t-main"><div class="t-title">' + esc(fmtQty(left)) + " " + esc(r.unit || it.unit) + " available</div>" +
+        '<div class="t-sub">' + esc(r.item_name) + "</div>" +
+        (left > 0 ? '<div class="t-sub">Tap to use from the shop</div>' : '<div class="t-sub">Already used on this order</div>') + '</div><span class="chev">›</span></button>';
+    });
+    h += '</div><button class="btn block" style="margin-top:14px" id="order-anyway">Not enough / wrong item - order from ' + esc(o.supplier) + "</button>" +
+      '<button class="btn block" style="margin-top:8px" data-action="close-sheet">Cancel</button>';
+    openSheet(h, function (sheet) {
+      sheet.querySelectorAll("[data-shop-pick]").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var k = b.getAttribute("data-shop-pick");
+          var r = matches.filter(function (m) { return m.item_key + "|" + m.division === k; })[0];
+          closeSheet();
+          openShopQty(it, r, +r.qty - (claimed[k] || 0));
+        });
+      });
+      sheet.querySelector("#order-anyway").addEventListener("click", function () {
+        closeSheet();
+        openSupplierQty(it, null, true);
+      });
+    });
+  }
+
+  function openShopQty(it, r, available) {
+    var key = "shop:" + r.item_key + ":" + r.division;
+    openQtySheet({
+      title: r.item_name,
+      sub: "From our shop · Div " + r.division,
+      note: fmtQty(available) + " " + (r.unit || it.unit) + " available in Div " + r.division,
+      price: 0, unit: r.unit || it.unit, qty: "", existing: false, saveLabel: "Use from Shop",
+      validate: function (q) { return q > available + 1e-9 ? "Only " + fmtQty(available) + " available in Div " + r.division : ""; },
+      onSave: function (q) {
+        var ord = currentOrder();
+        var l = ord.lines.filter(function (x) { return x.key === key && !x.pulled; })[0];
+        if (l) l.qty = +(l.qty + q).toFixed(3);
+        else ord.lines.push({
+          key: key, source: "shop", division: r.division, stockKey: r.item_key, name: r.item_name, unit: r.unit || it.unit,
+          category: r.category, model: r.model, price: 0, qty: q, pulled: false
+        });
+        putOrder(ord);
+        toast("From shop: " + fmtQty(q) + " " + (r.unit || it.unit) + " (Div " + r.division + ")");
+      }
+    });
+  }
+
+  function openSupplierQty(it, existing, checkedShop) {
+    var key = it.key;
     var qty = existing ? existing.qty : "";
     openQtySheet({
       title: it.name,
@@ -758,7 +971,7 @@
         var ord = currentOrder();
         var l = ord.lines.filter(function (x) { return x.key === key; })[0];
         if (l) l.qty = q;
-        else ord.lines.push({ key: key, id: it.id, name: it.name, unit: it.unit, price: it.price, model: it.model, category: it.category, qty: q });
+        else ord.lines.push({ key: key, id: it.id, name: it.name, unit: it.unit, price: it.price, model: it.model, category: it.category, qty: q, shopChecked: !!checkedShop });
         putOrder(ord);
         toast((l ? "Updated: " : "Added: ") + fmtQty(q) + " " + it.unit);
       },
@@ -770,7 +983,7 @@
     var quick = /^(LF|FT|SF|LY)$/.test(opt.unit) ? [10, 25, 50, 100] : [1, 5, 10, 25];
     var h = "<h2>" + esc(opt.title) + "</h2>" +
       (opt.sub ? '<div class="hint" style="margin-top:-6px">' + esc(opt.sub) + "</div>" : "") +
-      '<div style="font-weight:700">' + (opt.price > 0 ? fmtMoney(opt.price) + " / " + esc(opt.unit) : "Price TBD / " + esc(opt.unit)) + "</div>" +
+      '<div style="font-weight:700">' + (opt.note ? esc(opt.note) : opt.price > 0 ? fmtMoney(opt.price) + " / " + esc(opt.unit) : "Price TBD / " + esc(opt.unit)) + "</div>" +
       '<div class="big-stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>' +
       '<input id="qty" type="number" inputmode="decimal" min="0" step="any" value="' + esc(opt.qty) + '" placeholder="0" aria-label="Quantity">' +
       '<button type="button" data-step="1" aria-label="Increase">+</button></div>' +
@@ -778,7 +991,7 @@
       '<div class="chips quick">' + quick.map(function (n) { return '<button type="button" class="chip" data-add="' + n + '">+' + n + "</button>"; }).join("") + "</div>" +
       '<div class="line-total" id="line-total"></div>' +
       '<div class="btn-row">' + (opt.existing ? '<button class="btn danger" id="qty-remove">Remove</button>' : '<button class="btn" data-action="close-sheet">Cancel</button>') +
-      '<button class="btn primary" id="qty-save">' + (opt.existing ? "Update" : "Add to Order") + "</button></div>";
+      '<button class="btn primary" id="qty-save">' + (opt.saveLabel || (opt.existing ? "Update" : "Add to Order")) + "</button></div>";
     openSheet(h, function (sheet) {
       var input = sheet.querySelector("#qty");
       function upd() {
@@ -803,6 +1016,8 @@
       sheet.querySelector("#qty-save").addEventListener("click", function () {
         var q = parseFloat(input.value);
         if (!(q > 0)) { input.focus(); toast("Enter a quantity"); return; }
+        var bad = opt.validate && opt.validate(+q.toFixed(3));
+        if (bad) { input.focus(); toast(bad); return; }
         opt.onSave(+q.toFixed(3));
         closeSheet();
         afterChange();
@@ -862,22 +1077,21 @@
     h += '<div class="card"><dl class="kv"><dt>Order #</dt><dd data-order-number>' + esc(orderNo(o)) + "</dd><dt>Supplier</dt><dd>" + esc(o.supplier) +
       "</dd><dt>Job #</dt><dd>" + esc(o.jobNumber) + "</dd>" + (o.jobName ? "<dt>Job name</dt><dd>" + esc(o.jobName) + "</dd>" : "") + "</dl></div>";
 
-    h += '<h3>Materials (' + o.lines.length + ")</h3><div class=\"card\">";
-    if (!o.lines.length) h += '<div class="empty">No materials yet.</div>';
-    o.lines.forEach(function (l) {
-      h += '<div class="line"><div><div class="l-name">' + esc(l.name) + "</div>" +
-        '<div class="l-sub">' + (l.custom ? "Not in price list" : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
-        (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit) + "</div></div>" +
-        '<div class="l-ext">' + (l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
-        '<div class="l-controls"><div class="stepper"><button data-action="line-step" data-key="' + esc(l.key) + '" data-step="-1" aria-label="Decrease">−</button>' +
-        '<input type="number" inputmode="decimal" min="0" step="any" value="' + esc(fmtQty(l.qty)) + '" data-line-qty="' + esc(l.key) + '" aria-label="Quantity">' +
-        '<span class="u">' + esc(l.unit) + '</span><button data-action="line-step" data-key="' + esc(l.key) + '" data-step="1" aria-label="Increase">+</button></div>' +
-        '<button class="link-btn" data-action="line-remove" data-key="' + esc(l.key) + '">Remove</button></div></div>';
-    });
-    h += '<div class="totals"><span>Estimated total</span><span id="order-total">' + fmtMoney(orderTotal(o)) + "</span></div>";
-    if (o.lines.some(function (l) { return !(l.price > 0); })) h += '<div class="notice">Some items have no listed price and are not included in the total.</div>';
+    var sup = supLines(o), shp = shopLines(o);
+    h += '<h3>Order from ' + esc(o.supplier) + " (" + sup.length + ')</h3><div class="card">';
+    if (!sup.length) h += '<div class="empty">' + (shp.length ? "Nothing to order from the supplier - everything is coming from the shop." : "No materials yet.") + "</div>";
+    sup.forEach(function (l) { h += lineHtml(l); });
+    if (sup.length) {
+      h += '<div class="totals"><span>Estimated total</span><span id="order-total">' + fmtMoney(orderTotal(o)) + "</span></div>";
+      if (sup.some(function (l) { return !(l.price > 0); })) h += '<div class="notice">Some items have no listed price and are not included in the total.</div>';
+    }
     h += '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="to-build">' + ICON.plus + 'Add more materials</button>' +
       '<button class="btn" data-action="custom-item">Add unlisted item</button></div></div>';
+    if (shp.length) {
+      h += '<h3>' + ICON_SHOP + 'Pull from our shop (' + shp.length + ')</h3><div class="card shop-card">';
+      shp.forEach(function (l) { h += lineHtml(l); });
+      h += '<div class="hint" style="margin:8px 0 0">These are not sent to the supplier.</div></div>';
+    }
 
     h += '<h3>Delivery & details</h3><div class="card"><form id="details-form">' +
       '<label class="field"><span>Requested by</span><input class="input" name="requestedBy" autocomplete="name" value="' + esc(o.requestedBy) + '" placeholder="Your name"></label>' +
@@ -932,6 +1146,21 @@
     });
   };
 
+  function lineHtml(l) {
+    var shop = isShop(l);
+    return '<div class="line' + (shop ? " shop-line" : "") + '"><div><div class="l-name">' + esc(l.name) + "</div>" +
+      '<div class="l-sub">' + (shop
+        ? '<span class="div-tag">Div ' + esc(l.division) + "</span> " + (l.pulled ? "Pulled ✓" : "To be pulled from shop")
+        : (l.custom ? "Not in price list" : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
+          (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit)) + "</div></div>" +
+      '<div class="l-ext">' + (shop ? "Shop" : l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
+      (shop && l.pulled ? '<div class="l-controls"><b>' + esc(fmtQty(l.qty)) + " " + esc(l.unit) + "</b></div>" :
+      '<div class="l-controls"><div class="stepper"><button data-action="line-step" data-key="' + esc(l.key) + '" data-step="-1" aria-label="Decrease">−</button>' +
+      '<input type="number" inputmode="decimal" min="0" step="any" value="' + esc(fmtQty(l.qty)) + '" data-line-qty="' + esc(l.key) + '" aria-label="Quantity">' +
+      '<span class="u">' + esc(l.unit) + '</span><button data-action="line-step" data-key="' + esc(l.key) + '" data-step="1" aria-label="Increase">+</button></div>' +
+      '<button class="link-btn" data-action="line-remove" data-key="' + esc(l.key) + '">Remove</button></div>') + "</div>";
+  }
+
   function setLineQty(key, q) {
     var o = currentOrder();
     o.lines.forEach(function (l) { if (l.key === key) l.qty = +(+q).toFixed(3); });
@@ -943,18 +1172,31 @@
     var o = currentOrder();
     if (!o) return VIEWS.home();
     var editable = o.status === "draft";
-    var ready = !!o.number;
+    var ready = !!o.number || !supLines(o).length;
     var canSharePdf = !!(navigator.canShare && window.File && navigator.canShare({ files: [new File([""], "x.pdf", { type: "application/pdf" })] }));
     var h = topbar(o.number ? "Order " + o.number : "New order (# pending)", "Job " + o.jobNumber + " · " + o.supplier, backBtn(editable ? "to-review" : "history", "Back"), syncPill());
     h += '<main class="page">';
     h += '<div class="card done-card"><div class="done-icon">' + (o.status === "sent" ? "✓" : "➜") + '</div><h2 style="margin-top:0">' +
       (o.status === "sent" ? "Order sent" : "Order ready to send") + "</h2>" +
-      '<div class="hint">' + o.lines.length + " item" + (o.lines.length === 1 ? "" : "s") + " · " + (o.showPricing ? "Est. " + fmtMoney(orderTotal(o)) : "pricing hidden") + "</div>" +
+      '<div class="hint">' + supLines(o).length + " from " + esc(o.supplier) + (shopLines(o).length ? " · " + shopLines(o).length + " from our shop" : "") +
+        (supLines(o).length ? " · " + (o.showPricing ? "Est. " + fmtMoney(orderTotal(o)) : "pricing hidden") : "") + "</div>" +
       '<label class="toggle" style="justify-content:center"><input type="checkbox" id="send-pricing"' + (o.showPricing ? " checked" : "") + ">Include listed pricing</label></div>";
+    var hasSup = supLines(o).length > 0, shp = shopLines(o);
+    if (shp.length) {
+      var waiting = shp.filter(function (l) { return !l.pulled; });
+      h += '<h3>' + ICON_SHOP + 'Pull from our shop</h3><div class="card shop-card">' + shp.map(function (l) {
+        return lineSummary(l).replace("</div>", l.pulled ? ' <span class="badge sent">Pulled</span></div>' : "</div>");
+      }).join("");
+      if (waiting.length && canEditShop() && o.status === "sent") h += '<button class="btn primary block" style="margin-top:10px" data-action="open-pull" data-id="' + esc(o.id) + '">Mark pulled &amp; update shop stock</button>';
+      else if (waiting.length && canEditShop()) h += '<div class="hint" style="margin:8px 0 0">After the order is sent you can mark these pulled here.</div>';
+      else if (waiting.length) h += '<div class="hint" style="margin:8px 0 0">Shop staff will see this on the Shop Stock screen and pull it.</div>';
+      h += "</div>";
+    }
+    if (!hasSup) h += '<div class="notice">Nothing to order from ' + esc(o.supplier) + ' - everything on this order is coming from the shop.</div>';
     if (!ready) {
       h += '<div class="notice">This order gets its number (' + esc(o.jobNumber) + "-00#) as soon as the phone is back online. Sending is available after that.</div>";
     }
-    h += '<div class="tile-list' + (ready ? "" : " disabled") + '">' +
+    if (hasSup) h += '<h3>Send to ' + esc(o.supplier) + '</h3><div class="tile-list' + (ready ? "" : " disabled") + '">' +
       (canSharePdf ? sendTile("share-pdf", "Send PDF (email / text)", "Kim Industries PDF, attached with any app") : "") +
       sendTile("email", "Email to supplier", emailFor(o.supplier) ? "To " + emailFor(o.supplier) + " · order in the email body" : "Opens your email app · order in the email body") +
       sendTile("pdf", "Download PDF", "Kim Industries purchase order") +
@@ -963,9 +1205,9 @@
       sendTile("copy", "Copy order text", "Paste into a text or email") +
       sendTile("csv", "Download spreadsheet (CSV)", "Opens in Excel") +
       "</div>";
-    h += '<h3>Preview</h3><div class="card preview-card"><div class="po-preview">' + printHtml(o) + "</div></div>";
+    if (hasSup) h += '<h3>Preview</h3><div class="card preview-card"><div class="po-preview">' + printHtml(o) + "</div></div>";
     h += '<div class="btn-row" style="margin:16px 0 40px">' +
-      (o.status === "sent" ? '<button class="btn" data-action="reopen">Edit order</button>' : '<button class="btn brand" data-action="mark-sent"' + (ready ? "" : " disabled") + ">Mark as sent</button>") +
+      (o.status === "sent" ? '<button class="btn" data-action="reopen">Edit order</button>' : '<button class="btn brand" data-action="mark-sent"' + (ready ? "" : " disabled") + ">" + (hasSup ? "Mark as sent" : "Submit shop pull") + "</button>") +
       '<button class="btn" data-action="duplicate">Reorder (copy)</button><button class="btn" data-action="home">Done</button></div>';
     h += "</main>";
     return h;
@@ -994,7 +1236,7 @@
       (o.needBy ? "Needed by: " + fmtDate(o.needBy) + "\n" : "") +
       (o.delivery === "pickup" ? "Delivery: Will call / pickup\n" : "Delivery: Deliver to job" + (o.deliverTo ? " - " + o.deliverTo.replace(/\n/g, ", ") : "") + "\n") +
       "\n";
-    o.lines.forEach(function (l, i) {
+    supLines(o).forEach(function (l, i) {
       t += (i + 1) + ". " + fmtQty(l.qty) + " " + l.unit + " - " + l.name + (l.model ? " [#" + l.model + "]" : "");
       if (p) t += l.price > 0 ? " @ " + fmtMoney(l.price) + " = " + fmtMoney(lineTotal(l)) : " @ price TBD";
       t += "\n";
@@ -1016,7 +1258,7 @@
     var head = ["Line", "Qty", "Unit", "Description", "Model #", "Item ID", "Category"];
     if (p) head.push("Unit Price", "Ext Price");
     rows.push(head);
-    o.lines.forEach(function (l, i) {
+    supLines(o).forEach(function (l, i) {
       var r = [i + 1, fmtQty(l.qty), l.unit, l.name, l.model, l.id, l.category];
       if (p) r.push(l.price > 0 ? l.price.toFixed(2) : "", l.price > 0 ? lineTotal(l).toFixed(2) : "");
       rows.push(r);
@@ -1040,7 +1282,7 @@
       (o.needBy ? "<div><b>Needed by:</b> " + esc(fmtDate(o.needBy)) + "</div>" : "") +
       "<div><b>Delivery:</b> " + esc(deliveryText(o)) + "</div></div></div>" +
       '<table><thead><tr><th>#</th><th class="num">Qty</th><th>Unit</th><th>Description</th><th>Model #</th>' + (p ? '<th class="num">Unit Price</th><th class="num">Ext</th>' : "") + "</tr></thead><tbody>";
-    o.lines.forEach(function (l, i) {
+    supLines(o).forEach(function (l, i) {
       h += "<tr><td>" + (i + 1) + '</td><td class="num">' + esc(fmtQty(l.qty)) + "</td><td>" + esc(l.unit) + "</td><td>" + esc(l.name) + "</td><td>" + esc(l.model || "") + "</td>" +
         (p ? '<td class="num">' + (l.price > 0 ? fmtMoney(l.price) : "TBD") + '</td><td class="num">' + (l.price > 0 ? fmtMoney(lineTotal(l)) : "") + "</td>" : "") + "</tr>";
     });
@@ -1109,7 +1351,7 @@
 
       var head = ["#", "Qty", "Unit", "Description", "Model #"];
       if (p) head.push("Unit Price", "Ext");
-      var body = o.lines.map(function (l, i) {
+      var body = supLines(o).map(function (l, i) {
         var r = [i + 1, fmtQty(l.qty), l.unit, l.name, l.model || ""];
         if (p) r.push(l.price > 0 ? fmtMoney(l.price) : "TBD", l.price > 0 ? fmtMoney(lineTotal(l)) : "");
         return r;
@@ -1131,7 +1373,7 @@
         doc.setFont("helvetica", "bold").setFontSize(13).setTextColor.apply(doc, INK);
         doc.text("Estimated total:  " + fmtMoney(orderTotal(o)), W - M, y, { align: "right" });
         y += 22;
-        if (o.lines.some(function (l) { return !(l.price > 0); })) {
+        if (supLines(o).some(function (l) { return !(l.price > 0); })) {
           doc.setFont("helvetica", "normal").setFontSize(9).setTextColor.apply(doc, GREY).text("Items marked TBD are not included in the total.", W - M, y, { align: "right" });
           y += 16;
         }
@@ -1229,6 +1471,279 @@
   }
 
   // ----- history
+  // ----- shop stock
+  function pendingPulls() {
+    return getOrders().filter(function (o) {
+      return o.status === "sent" && shopLines(o).some(function (l) { return !l.pulled; });
+    });
+  }
+
+  VIEWS.shop = function () {
+    var h = topbar("Shop Stock", "Material on hand in our shops", backBtn("home", "Home"), syncPill());
+    h += '<main class="page">';
+    if (!Cloud.enabled) return h + '<div class="empty">Shop stock needs the shared database.</div></main>';
+    if (canEditShop()) h += '<button class="btn primary big block" data-action="shop-add" style="margin-bottom:14px">' + ICON.plus + "Add Material to Shop</button>";
+    else h += '<div class="notice">You can see shop stock. To add or remove material, ask an admin for permission.</div>';
+
+    var pulls = canEditShop() ? pendingPulls() : [];
+    if (pulls.length) {
+      h += '<h3>Waiting to be pulled (' + pulls.length + ')</h3><div class="tile-list" style="margin-bottom:8px">';
+      pulls.forEach(function (o) {
+        var ls = shopLines(o).filter(function (l) { return !l.pulled; });
+        h += '<button class="tile" data-action="open-pull" data-id="' + esc(o.id) + '"><div class="t-main"><div class="t-title">Job ' + esc(o.jobNumber) + " · " + esc(orderNo(o)) + "</div>" +
+          '<div class="t-sub">' + ls.length + " item" + (ls.length === 1 ? "" : "s") + " · " + esc(o.createdByName || "") + "</div>" +
+          '<div class="t-sub">' + ls.slice(0, 2).map(function (l) { return esc(fmtQty(l.qty) + " " + l.unit + " " + l.name) + " (Div " + esc(l.division) + ")"; }).join("<br>") + "</div>" +
+          '</div><span class="badge draft">Pull</span></button>';
+      });
+      h += "</div>";
+    }
+
+    h += '<div class="searchbar"><div class="search-wrap">' + ICON.search +
+      '<input class="search-input" id="stock-q" type="search" autocomplete="off" placeholder=\'Search shop stock, e.g. 1/2 x 1 fiberglass\' value="' + esc(state.stockQuery || "") + '" aria-label="Search shop stock"></div>' +
+      '<div class="chips" style="margin:10px 0 0"><button class="chip' + (state.stockDiv ? "" : " on") + '" data-action="stock-div" data-div="">All divisions</button>' +
+      DIVISIONS.map(function (d) { return '<button class="chip' + (state.stockDiv === d ? " on" : "") + '" data-action="stock-div" data-div="' + d + '">' + d + "</button>"; }).join("") +
+      '</div></div><div id="stock-list"></div></main>';
+    return h;
+  };
+  AFTER.shop = function () {
+    var q = document.getElementById("stock-q");
+    if (!q) return;
+    q.addEventListener("input", function () {
+      state.stockQuery = q.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(renderStockList, 140);
+    });
+    renderStockList();
+  };
+
+  function renderStockList() {
+    var box = document.getElementById("stock-list");
+    if (!box) return;
+    var rows = getStock().filter(function (r) { return !state.stockDiv || r.division === state.stockDiv; });
+    var items = rows.map(function (r) { return { name: r.item_name, category: r.category || "", model: r.model || "", row: r }; });
+    if ((state.stockQuery || "").trim()) {
+      S.buildIndex(items);
+      items = S.search(items, state.stockQuery).results;
+    } else {
+      items.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : a.row.division < b.row.division ? -1 : 1; });
+    }
+    if (!getStock().length) {
+      box.innerHTML = '<div class="empty"><p><b>No shop stock entered yet.</b></p>' + (canEditShop() ? "<p>Tap <b>Add Material to Shop</b> to start.</p>" : "") + "</div>";
+      return;
+    }
+    if (!items.length) { box.innerHTML = '<div class="empty">Nothing matches.</div>'; return; }
+    box.innerHTML = '<div class="search-meta" style="margin-bottom:8px"><b>' + items.length + "</b> item" + (items.length === 1 ? "" : "s") + "</div>" +
+      '<ul class="results">' + items.slice(0, 300).map(function (x) {
+        var r = x.row;
+        return '<li class="result stock-row"><button class="r-main" data-action="stock-item" data-key="' + esc(r.item_key) + '" data-div="' + esc(r.division) + '">' +
+          '<div class="r-name">' + esc(r.item_name) + '</div><div class="r-sub">' + esc(r.category || "") + (r.model ? " · #" + esc(r.model) : "") + "</div>" +
+          '<div class="r-sub">Updated ' + esc(fmtDate(r.updated_at)) + (r.updated_by ? " by " + esc(r.updated_by.split("@")[0]) : "") + "</div></button>" +
+          '<div class="stock-qty"><span class="div-badge">Div ' + esc(r.division) + '</span><b>' + esc(fmtQty(r.qty)) + "</b><small>" + esc(r.unit || "") + "</small></div></li>";
+      }).join("") + "</ul>";
+  }
+
+  // Stock sheet: see what's on hand for one material and (with permission) add / remove / set it.
+  function openStockSheet(item, presetDiv) {
+    var rows = getStock().filter(function (r) { return r.item_key === item.key; });
+    var div = presetDiv || (rows[0] && rows[0].division) || "";
+    var edit = canEditShop();
+    var h = "<h2>" + esc(item.name) + "</h2>" + '<div class="hint" style="margin-top:-6px">' + esc(item.category || "") + (item.model ? " · #" + esc(item.model) : "") + "</div>";
+    h += '<div class="onhand">' + (rows.length ? rows.map(function (r) {
+      return '<div><span class="div-badge">Div ' + esc(r.division) + "</span><b>" + esc(fmtQty(r.qty)) + " " + esc(r.unit || item.unit || "") + "</b></div>";
+    }).join("") : '<div class="hint" style="margin:0">None in the shop yet.</div>') + "</div>";
+    if (edit) {
+      h += '<div class="field"><span style="display:block;font-weight:600;margin-bottom:6px">Division <span class="req">*</span></span><div class="chips div-chips">' +
+        DIVISIONS.map(function (d) { return '<button type="button" class="chip' + (d === div ? " on" : "") + '" data-div="' + d + '">' + d + "</button>"; }).join("") + "</div></div>" +
+        '<div class="big-stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>' +
+        '<input id="stock-qty" type="number" inputmode="decimal" min="0" step="any" placeholder="0" aria-label="Quantity">' +
+        '<button type="button" data-step="1" aria-label="Increase">+</button></div><div class="unit-label">' + esc(item.unit || "") + "</div>" +
+        '<label class="field" style="margin-top:12px"><span>Note / job # (optional)</span><input class="input" id="stock-note" placeholder="e.g. Leftover from job 24-118"></label>' +
+        '<div class="btn-row"><button class="btn primary" data-stock-op="add">' + ICON.plus + "Add to shop</button>" +
+        '<button class="btn" data-stock-op="remove">Remove</button><button class="btn" data-stock-op="set">Set count</button></div>' +
+        '<div class="hint" style="font-size:13px">Add = put more in. Remove = taken out. Set count = what\'s actually on the shelf now.</div>';
+    } else {
+      h += '<div class="notice">Only people with shop permission can change stock.</div>';
+    }
+    h += '<h3 style="margin-top:18px">History</h3><div id="stock-history" class="hint">Loading…</div>' +
+      '<button class="btn block" style="margin-top:12px" data-action="close-sheet">Close</button>';
+    openSheet(h, function (sheet) {
+      Cloud.stockLog(item.key).then(function (log) {
+        var el = sheet.querySelector("#stock-history");
+        if (!el) return;
+        el.innerHTML = log.length ? log.map(function (e) {
+          return '<div class="log-row"><b class="' + (e.delta >= 0 ? "pos" : "neg") + '">' + (e.delta > 0 ? "+" : "") + esc(fmtQty(e.delta)) + "</b> Div " + esc(e.division) +
+            " → " + esc(fmtQty(e.qty_after)) + '<div class="t-sub">' + esc(fmtDate(e.at)) + " · " + esc((e.by_email || "").split("@")[0]) +
+            (e.job_number ? " · Job " + esc(e.job_number) : "") + (e.reason ? " · " + esc(e.reason) : "") + "</div></div>";
+        }).join("") : "No changes recorded yet.";
+      }, function () { var el = sheet.querySelector("#stock-history"); if (el) el.textContent = "History unavailable offline."; });
+      if (!edit) return;
+      var input = sheet.querySelector("#stock-qty");
+      sheet.querySelectorAll(".div-chips .chip").forEach(function (c) {
+        c.addEventListener("click", function () {
+          div = c.getAttribute("data-div");
+          sheet.querySelectorAll(".div-chips .chip").forEach(function (x) { x.classList.toggle("on", x === c); });
+        });
+      });
+      sheet.querySelectorAll("[data-step]").forEach(function (b) {
+        b.addEventListener("click", function () { input.value = Math.max(0, +((parseFloat(input.value) || 0) + (+b.getAttribute("data-step"))).toFixed(3)); });
+      });
+      sheet.querySelectorAll("[data-stock-op]").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var op = b.getAttribute("data-stock-op");
+          var q = parseFloat(input.value);
+          if (!div) { toast("Pick a division"); return; }
+          if (!(q >= 0) || (op !== "set" && !(q > 0))) { input.focus(); toast("Enter a quantity"); return; }
+          if (!navigator.onLine) { toast("Connect to the internet to change shop stock"); return; }
+          var note = sheet.querySelector("#stock-note").value.trim();
+          var job = (note.match(/\b\d{2,}-\d+\b/) || [])[0] || null;
+          b.disabled = true;
+          Cloud.adjustStock({
+            item: item, division: div,
+            delta: op === "add" ? q : op === "remove" ? -q : null,
+            set: op === "set" ? q : null,
+            reason: note || (op === "add" ? "Added to shop" : op === "remove" ? "Removed from shop" : "Count corrected"),
+            job: job
+          }).then(function (now) {
+            return refreshStock().then(function () {
+              closeSheet();
+              toast("Div " + div + ": now " + fmtQty(now) + " " + (item.unit || ""));
+              if (state.view === "shop-add") go("shop"); else render();
+            });
+          }, function (e) {
+            b.disabled = false;
+            toast(/permission/i.test(e.message) ? "You don't have permission to change shop stock" : e.message || "Couldn't save");
+          });
+        });
+      });
+    });
+  }
+
+  // Pull the shop lines of an order out of stock (shop-permission users).
+  function openPullSheet(orderId) {
+    var o = getOrder(orderId);
+    if (!o) return;
+    var ls = shopLines(o).filter(function (l) { return !l.pulled; });
+    var h = "<h2>Pull from shop - Job " + esc(o.jobNumber) + "</h2>" + '<div class="hint" style="margin-top:-6px">' + esc(orderNo(o)) + (o.createdByName ? " · requested by " + esc(o.createdByName) : "") + "</div>" +
+      '<div class="card" style="box-shadow:none">' + ls.map(lineSummary).join("") + "</div>" +
+      '<div class="btn-row"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="do-pull">Mark pulled &amp; update stock</button></div>';
+    openSheet(h, function (sheet) {
+      sheet.querySelector("#do-pull").addEventListener("click", function (e) {
+        e.target.disabled = true;
+        pullShopLines(orderId).then(function () { closeSheet(); render(); }, function () { e.target.disabled = false; });
+      });
+    });
+  }
+  function lineSummary(l) {
+    return '<div class="log-row"><span class="div-badge">Div ' + esc(l.division) + "</span> <b>" + esc(fmtQty(l.qty)) + " " + esc(l.unit) + "</b> " + esc(l.name) + "</div>";
+  }
+
+  function pullShopLines(orderId) {
+    if (!navigator.onLine) { toast("Connect to the internet to update shop stock"); return Promise.reject(); }
+    var o = getOrder(orderId);
+    var chain = Promise.resolve();
+    shopLines(o).filter(function (l) { return !l.pulled; }).forEach(function (l) {
+      chain = chain.then(function () {
+        return Cloud.adjustStock({
+          item: { key: l.stockKey, name: l.name, unit: l.unit, category: l.category, model: l.model },
+          division: l.division, delta: -l.qty, reason: "Pulled for job", job: o.jobNumber, orderId: o.id
+        }).then(function () {
+          var cur = getOrder(orderId);
+          cur.lines.forEach(function (x) {
+            if (x.key === l.key && !x.pulled) { x.pulled = true; x.pulledBy = Cloud.user.email; x.pulledAt = new Date().toISOString(); }
+          });
+          putOrder(cur);
+        });
+      });
+    });
+    return chain.then(function () {
+      toast("Pulled from shop - stock updated");
+      scheduleSync(0);
+      return refreshStock();
+    }, function (e) {
+      toast(e && e.message ? e.message : "Couldn't update stock");
+      refreshStock();
+      throw e;
+    });
+  }
+
+  // ----- users & permissions (admin)
+  VIEWS.users = function () {
+    var h = topbar("Users & Permissions", "Admin", backBtn("settings", "Settings"));
+    h += '<main class="page">';
+    if (!isAdmin()) return h + '<div class="empty">Only an admin can manage users.</div></main>';
+    h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a person</h2><form id="user-form" autocomplete="off">' +
+      '<label class="field"><span>Email <span class="req">*</span></span><input class="input" name="email" type="email" required placeholder="name@kimindustries.com"></label>' +
+      '<label class="field"><span>Name</span><input class="input" name="name" placeholder="First and last name"></label>' +
+      '<label class="toggle"><input type="checkbox" name="can_edit_shop">Can add / remove shop stock</label>' +
+      '<label class="toggle"><input type="checkbox" name="admin">Admin (can manage users)</label>' +
+      '<label class="field" style="margin-top:8px"><span>Temporary password (creates their login)</span><input class="input" name="password" type="text" minlength="8" placeholder="At least 8 characters - leave blank if they already have a login"></label>' +
+      '<div class="error-text" id="user-error" hidden></div>' +
+      '<button class="btn primary block" type="submit">Save person</button></form></div>';
+    h += '<h3>People</h3><div id="user-list" class="hint">Loading…</div></main>';
+    return h;
+  };
+  AFTER.users = function () {
+    if (!isAdmin()) return;
+    loadUsers();
+    document.getElementById("user-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var f = e.target, err = document.getElementById("user-error"), btn = f.querySelector("button[type=submit]");
+      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), can_edit_shop: f.can_edit_shop.checked, role: f.admin.checked ? "admin" : "user" };
+      var pw = f.password.value;
+      err.hidden = true;
+      if (!u.email) { f.email.focus(); return; }
+      if (pw && pw.length < 8) { err.textContent = "Password must be at least 8 characters."; err.hidden = false; return; }
+      btn.disabled = true;
+      var step = pw ? Cloud.adminUsers({ action: "create", email: u.email, password: pw, name: u.name }) : Promise.resolve();
+      step.then(function (r) {
+        return Cloud.saveUser(u).then(function () {
+          toast(pw ? (r && r.existed ? "Saved - they already had a login" : "Login created - give them the password") : "Saved");
+          f.reset();
+          loadUsers();
+        });
+      }).catch(function (ex) {
+        var m = ex && ex.message || "Couldn't save";
+        if (/Failed to send|FunctionsFetchError|not found|404/i.test(m)) m = "Couldn't create the login: the admin-users function isn't set up in Supabase yet. Permissions were not saved. Leave the password blank to save permissions only, and create the login in Supabase > Authentication > Users.";
+        err.textContent = m;
+        err.hidden = false;
+      }).then(function () { btn.disabled = false; });
+    });
+  };
+  function loadUsers() {
+    Cloud.listUsers().then(function (list) {
+      state.users = list;
+      var el = document.getElementById("user-list");
+      if (!el) return;
+      var me = (Cloud.user.email || "").toLowerCase();
+      el.className = "";
+      el.innerHTML = list.length ? '<div class="tile-list">' + list.map(function (u) {
+        var self = u.email === me;
+        return '<div class="card user-card' + (u.blocked ? " blocked" : "") + '"><div class="u-head"><div><div class="t-title">' + esc(u.name || u.email.split("@")[0]) +
+          (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
+          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + "</div></div></div>" +
+          '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + esc(u.email) + '"' + (u.can_edit_shop || u.role === "admin" ? " checked" : "") + (u.role === "admin" ? " disabled" : "") + ">Can add / remove shop stock</label>" +
+          (self ? "" : '<label class="toggle"><input type="checkbox" data-user-flag="admin" data-email="' + esc(u.email) + '"' + (u.role === "admin" ? " checked" : "") + ">Admin</label>" +
+            '<label class="toggle"><input type="checkbox" data-user-flag="blocked" data-email="' + esc(u.email) + '"' + (u.blocked ? " checked" : "") + ">Turn off access</label>") +
+          '<div class="btn-row"><button class="btn" data-action="user-password" data-email="' + esc(u.email) + '">Reset password</button>' +
+          (self ? "" : '<button class="btn danger" data-action="user-remove" data-email="' + esc(u.email) + '">Remove from list</button>') + "</div></div>";
+      }).join("") + "</div>" : '<div class="empty">No one added yet.</div>';
+      el.insertAdjacentHTML("beforeend", '<p class="hint" style="font-size:13px">People with a login who aren\'t listed here can order and look up shop stock, but can\'t change it.</p>');
+      el.querySelectorAll("[data-user-flag]").forEach(function (cb) {
+        cb.addEventListener("change", function () {
+          var u = state.users.filter(function (x) { return x.email === cb.getAttribute("data-email"); })[0];
+          var flag = cb.getAttribute("data-user-flag");
+          var nu = JSON.parse(JSON.stringify(u));
+          if (flag === "admin") nu.role = cb.checked ? "admin" : "user";
+          else nu[flag] = cb.checked;
+          Cloud.saveUser(nu).then(function () { toast("Saved"); loadUsers(); }, function (e) { toast(e.message || "Couldn't save"); loadUsers(); });
+        });
+      });
+    }, function (e) {
+      var el = document.getElementById("user-list");
+      if (el) el.textContent = "Couldn't load users: " + (e.message || "check your connection") + ". Has supabase/shop.sql been run?";
+    });
+  }
+
   VIEWS.history = function () {
     var all = getOrders();
     var me = Cloud.user ? Cloud.user.email : "";
@@ -1313,8 +1828,10 @@
     var h = topbar("Settings", "", backBtn("home", "Home"));
     h += '<main class="page"><form id="settings-form">';
     if (Cloud.enabled && Cloud.user) {
-      h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:10px">' + esc(Cloud.user.email) + "</div>" +
-        '<button type="button" class="btn" data-action="sign-out">Sign out</button></div>';
+      h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:4px">' + esc(Cloud.user.email) + "</div>" +
+        '<div class="hint" style="margin:0 0 10px">' + (isAdmin() ? "Admin" : canEditShop() ? "Can change shop stock" : "Crew member") + "</div>" +
+        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button>' : "") +
+        '<button type="button" class="btn" data-action="sign-out">Sign out</button></div></div>';
     }
     h += '<div class="card"><label class="field"><span>Your name (shown on orders)</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name || myName()) + '"></label>' +
       '<label class="field" style="margin:0"><span>Your phone</span><input class="input" name="phone" type="tel" autocomplete="tel" value="' + esc(s.phone) + '"></label></div>' +
@@ -1355,6 +1872,33 @@
   // ---------------------------------------------------------------- actions
   var ACTIONS = {
     "home": function () { go("home"); },
+    "shop": function () { go("shop"); refreshStock().then(function () { if (state.view === "shop") renderStockList(); }); },
+    "shop-add": function () {
+      if (!canEditShop()) { toast("You don't have permission to change shop stock"); return; }
+      go("shop-add", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" });
+    },
+    "stock-div": function (el) { state.stockDiv = el.getAttribute("data-div"); render(); },
+    "stock-item": function (el) {
+      var key = el.getAttribute("data-key");
+      var r = getStock().filter(function (x) { return x.item_key === key; })[0];
+      if (r) openStockSheet({ key: r.item_key, name: r.item_name, unit: r.unit, category: r.category, model: r.model }, el.getAttribute("data-div"));
+    },
+    "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
+    "users": function () { go("users"); },
+    "user-remove": function (el) {
+      var email = el.getAttribute("data-email");
+      if (!confirm("Remove " + email + " from the list? Their shop permission goes away (their login still works - use 'Turn off access' to block them).")) return;
+      Cloud.deleteUser(email).then(function () { toast("Removed"); loadUsers(); }, function (e) { toast(e.message || "Couldn't remove"); });
+    },
+    "user-password": function (el) {
+      var email = el.getAttribute("data-email");
+      var pw = prompt("New password for " + email + " (at least 8 characters):");
+      if (pw == null) return;
+      if (pw.length < 8) { toast("Password must be at least 8 characters"); return; }
+      Cloud.adminUsers({ action: "reset-password", email: email, password: pw }).then(function () { toast("Password changed"); }, function (e) {
+        toast(/Failed to send|FunctionsFetchError|404/i.test(e.message || "") ? "Set up the admin-users function in Supabase first" : e.message || "Couldn't change password");
+      });
+    },
     "sync-now": function () { syncNow().then(function () { if (sync.state === "synced") toast("Up to date"); }); },
     "history-mine": function (el) { state.historyMine = el.getAttribute("data-val") === "1"; render(); },
     "sign-out": function () {
@@ -1498,6 +2042,7 @@
         var it = l.key && BY_KEY[l.key];
         var c = JSON.parse(JSON.stringify(l));
         if (it) c.price = it.price;
+        if (c.source === "shop") { c.pulled = false; delete c.pulledBy; delete c.pulledAt; }
         return c;
       });
       var copy = JSON.parse(JSON.stringify(o));
