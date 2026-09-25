@@ -134,3 +134,33 @@ Ask the supplier for a text PDF or Excel.
 The price books sent so far are pre-built in [`supabase/special-pricing/`](supabase/special-pricing/),
 one file per job. Run each one in the SQL Editor. If you already loaded the older shared (multi-job) files, run
 [`supabase/split_books_by_job.sql`](supabase/split_books_by_job.sql) once instead. It gives every job its own copy.
+
+## Invoice Approval (AI agent)
+
+Upload vendor invoices (PDF or photos) under **Invoice Approval**. An AI agent (Claude, running in the
+`invoice-agent` Supabase Edge Function so the API key never reaches phones):
+1. **reads** the invoice: vendor, invoice #, PO / references, and every line (item code, description, qty, unit, unit price).
+2. **finds the order**: first by our order # on the invoice (e.g. PO "24-118-003"), otherwise by the products
+   (the sent order from that supplier whose item codes best match, boosted if the job # is printed).
+3. **matches lines** by item code (tolerant of O/0 and I/1 misreads). The agent pairs any leftover lines by description.
+4. **compares prices** with plain arithmetic: invoice unit price vs. the price on our order (including job
+   pricing). It flags lines billed at a different price and lines that weren't on the order, and notes short or over shipments.
+
+Invoices land in tabs: **Needs review** (pricing doesn't match / no order found / couldn't read), **Matches order**,
+**Approved**, **Sent back**. On each invoice the reviewer can **Approve**, choose a different order, re-run the check, or
+**Send back to supplier**. That opens an email (subject "Incorrect invoice [number]") listing the mismatched lines,
+with our order PDF and the vendor's invoice attached. Nothing is sent automatically: on phones it opens the
+share sheet with the attachments; on computers it downloads both files and opens an email draft to attach them to.
+
+Who can see invoices: admins, and people given **Can review invoices** in Users & Permissions.
+
+**One-time setup**
+1. **SQL Editor:** run [`supabase/invoices.sql`](supabase/invoices.sql). It creates the table, permission, and a private `invoices` storage bucket.
+2. Get an Anthropic API key (console.anthropic.com → API Keys).
+3. **Edge Functions → Secrets:** add `ANTHROPIC_API_KEY` with that key.
+4. **Edge Functions → Deploy a new function → Via Editor:** name it **`invoice-agent`**, paste
+   [`supabase/functions/invoice-agent/index.ts`](supabase/functions/invoice-agent/index.ts), click **Deploy**, then in the
+   function's **Settings** turn **off** "Verify JWT". (If Supabase gives it a different name, put that name in
+   `invoiceFunction` in `js/config.js`.)
+
+Model: `claude-opus-5` with adaptive thinking. Set the secret `INVOICE_MODEL` / `INVOICE_EFFORT` to change them.

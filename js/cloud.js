@@ -130,7 +130,7 @@
 
   // Permission row for the signed-in user ({role, can_edit_shop, blocked}) or a default for crew.
   Cloud.getMyAccess = function () {
-    return client.from("app_users").select("email, name, role, can_edit_shop, blocked")
+    return client.from("app_users").select("*")
       .eq("email", (user && user.email || "").toLowerCase()).maybeSingle().then(must)
       .then(function (r) { return r || { role: "user", can_edit_shop: false, blocked: false }; }, function (e) {
         // Table missing = supabase/shop.sql hasn't been run yet.
@@ -165,13 +165,14 @@
   };
 
   Cloud.listUsers = function () {
-    return client.from("app_users").select("email, name, role, can_edit_shop, blocked").order("email").then(must);
+    return client.from("app_users").select("*").order("email").then(must);
   };
 
   Cloud.saveUser = function (u) {
     return client.from("app_users").upsert({
       email: u.email.trim().toLowerCase(), name: u.name || null, role: u.role || "user",
-      can_edit_shop: !!u.can_edit_shop, blocked: !!u.blocked, updated_at: new Date().toISOString()
+      can_edit_shop: !!u.can_edit_shop, blocked: !!u.blocked, updated_at: new Date().toISOString(),
+      can_review_invoices: !!u.can_review_invoices
     }, { onConflict: "email" }).then(must);
   };
 
@@ -250,6 +251,70 @@
 
   Cloud.deleteBookItem = function (bookId, itemKey) {
     return client.from("price_book_items").delete().eq("book_id", bookId).eq("item_key", itemKey).then(must);
+  };
+
+  // ---------------------------------------------------------------- vendor invoices
+
+  Cloud.listInvoices = function () {
+    return fetchAll(function () {
+      return client.from("invoices").select("*").order("created_at", { ascending: false }).order("id");
+    });
+  };
+
+  Cloud.getInvoice = function (id) {
+    return client.from("invoices").select("*").eq("id", id).single().then(must);
+  };
+
+  // Upload the file, create the invoice record, then start the AI agent on it.
+  Cloud.uploadInvoice = function (file) {
+    var safe = String(file.name || "invoice").replace(/[^\w.\-]+/g, "_").slice(-80);
+    var path = new Date().toISOString().slice(0, 10) + "/" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) + "_" + safe;
+    return client.storage.from("invoices").upload(path, file, { contentType: file.type || undefined, upsert: false }).then(must)
+      .then(function () {
+        return client.from("invoices").insert({ file_path: path, file_name: file.name, file_type: file.type || null, status: "processing" })
+          .select("id").single().then(must);
+      })
+      .then(function (row) {
+        Cloud.runInvoiceAgent(row.id).catch(function (e) {
+          // (queries only run when awaited/then'd)
+          return client.from("invoices").update({ status: "error", error: e.message }).eq("id", row.id).then(function () {});
+        });
+        return row.id;
+      });
+  };
+
+  Cloud.runInvoiceAgent = function (invoiceId, orderId) {
+    var fn = cfg.invoiceFunction || "invoice-agent";
+    return client.functions.invoke(fn, { body: { invoice_id: invoiceId, order_id: orderId || null } }).then(function (res) {
+      if (res.error) {
+        var ctx = res.error.context;
+        if (res.error.name === "FunctionsFetchError") throw new Error("Couldn't reach the \"" + fn + "\" function. Check it's deployed with that name and \"Verify JWT\" is off.");
+        if (ctx && ctx.status === 404) throw new Error("Supabase has no Edge Function named \"" + fn + "\".");
+        if (ctx && typeof ctx.json === "function") return ctx.json().then(function (j) { throw new Error(j.error || res.error.message); }, function () { throw res.error; });
+        throw res.error;
+      }
+      if (res.data && res.data.error) throw new Error(res.data.error);
+      return res.data;
+    });
+  };
+
+  Cloud.updateInvoice = function (id, patch) {
+    patch.updated_at = new Date().toISOString();
+    return client.from("invoices").update(patch).eq("id", id).then(must);
+  };
+
+  Cloud.deleteInvoice = function (inv) {
+    return client.from("invoices").delete().eq("id", inv.id).then(must).then(function () {
+      return client.storage.from("invoices").remove([inv.file_path]).catch(function () { /* file cleanup is best effort */ });
+    });
+  };
+
+  Cloud.invoiceFileUrl = function (path) {
+    return client.storage.from("invoices").createSignedUrl(path, 600).then(must).then(function (d) { return d.signedUrl; });
+  };
+
+  Cloud.downloadInvoiceFile = function (path) {
+    return client.storage.from("invoices").download(path).then(must);
   };
 
   window.Cloud = Cloud;

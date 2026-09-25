@@ -10,5 +10,7 @@ window.APP_CONFIG = {
   supabaseUrl: "https://drhnhpuzrfmlvcmkzmmg.supabase.co",
   supabaseAnonKey: "sb_publishable_ZilRyEAiV3t2urJzPy7nOg_DijyIo89",
   // Name of the Edge Function deployed from supabase/functions/admin-users/index.ts
-  adminFunction: "swift-processor"
+  adminFunction: "swift-processor",
+  // Name of the Edge Function deployed from supabase/functions/invoice-agent/index.ts
+  invoiceFunction: "invoice-agent"
 };

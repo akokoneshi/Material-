@@ -339,7 +339,8 @@
           Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ }),
           Cloud.getMyAccess().then(function (a) { store.set("access", a); }, function () { /* keep cached */ }),
           refreshStock(),
-          refreshBooks()
+          refreshBooks(),
+          refreshInvoices()
         ]);
       })
       .then(function () {
@@ -352,7 +353,7 @@
       .then(function () {
         sync.running = false;
         if (sync.again) { sync.again = false; scheduleSync(300); }
-        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book") render();
+        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book" || state.view === "invoices") render();
         else if ((state.view === "build" || state.view === "review") && repriceOrder(currentOrder())) render();
         else if (state.view === "send") render();
         else if (state.view === "review") refreshOrderNumber();
@@ -549,10 +550,13 @@
       (Cloud.enabled ? '<button class="btn" data-action="shop">' + ICON_SHOP + "Shop Stock</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="pricing">' + ICON.tag + "Special Pricing</button>" : "") +
+      (canReviewInvoices() ? '<button class="btn" data-action="invoices">' + ICON.list + "Invoice Approval</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
     h += setupBanner();
     var pulls = canEditShop() ? pendingPulls() : [];
+    var invAttn = canReviewInvoices() ? getInvoices().filter(function (i) { return i.status === "mismatch" || i.status === "no_order" || i.status === "error"; }).length : 0;
+    if (invAttn) h += '<button class="tile pull-alert" data-action="invoices"><div class="t-main"><div class="t-title">' + invAttn + " invoice" + (invAttn === 1 ? "" : "s") + ' need review</div><div class="t-sub">Pricing doesn\'t match the order, or no order was found</div></div><span class="chev">›</span></button>';
     if (pulls.length) h += '<button class="tile pull-alert" data-action="shop"><div class="t-main"><div class="t-title">' + ICON_SHOP + pulls.length + " order" + (pulls.length === 1 ? "" : "s") + ' waiting on shop material</div><div class="t-sub">Tap to pull and update stock</div></div><span class="chev">›</span></button>';
     if (drafts.length) {
       h += "<h3>" + (Cloud.enabled ? "Your drafts" : "Continue a draft") + '</h3><div class="tile-list">';
@@ -2329,6 +2333,235 @@
     });
   }
 
+  // ----- vendor invoices & approval
+  function canReviewInvoices() { return Cloud.enabled && !!Cloud.user && !access().blocked && (access().role === "admin" || !!access().can_review_invoices); }
+  function getInvoices() { return store.get("invoices", []); }
+  function currentInvoice() { return getInvoices().filter(function (x) { return x.id === state.invoiceId; })[0] || null; }
+  var INV_STATUS = {
+    processing: ["busy", "AI checking…"],
+    mismatch: ["bad", "Pricing doesn't match"],
+    no_order: ["warn", "No order found"],
+    error: ["warn", "Couldn't read"],
+    matched: ["ok", "Matches order"],
+    approved: ["done", "Approved"],
+    sent_back: ["sent", "Sent back to supplier"]
+  };
+  var INV_FILTERS = [
+    ["attention", "Needs review", function (i) { return i.status === "mismatch" || i.status === "no_order" || i.status === "error"; }],
+    ["matched", "Matches order", function (i) { return i.status === "matched"; }],
+    ["processing", "Checking", function (i) { return i.status === "processing"; }],
+    ["approved", "Approved", function (i) { return i.status === "approved"; }],
+    ["sent_back", "Sent back", function (i) { return i.status === "sent_back"; }],
+    ["all", "All", function () { return true; }]
+  ];
+  function invBadge(st) { var m = INV_STATUS[st] || ["", st]; return '<span class="inv-badge ' + m[0] + '">' + esc(m[1]) + "</span>"; }
+  function refreshInvoices() {
+    if (!canReviewInvoices() || !navigator.onLine) return Promise.resolve();
+    return Cloud.listInvoices().then(function (list) { store.set("invoices", list); store.set("invoicesSetupMissing", false); }, function (e) {
+      if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) store.set("invoicesSetupMissing", true);
+    });
+  }
+  // While the agent is working, check back every few seconds.
+  var invPoll = null;
+  function pollInvoices() {
+    clearTimeout(invPoll);
+    if (state.view !== "invoices" && state.view !== "invoice") return;
+    if (!getInvoices().some(function (i) { return i.status === "processing"; })) return;
+    invPoll = setTimeout(function () {
+      refreshInvoices().then(function () { if (state.view === "invoices" || state.view === "invoice") { var y = window.scrollY; render(); window.scrollTo(0, y); } });
+    }, 4000);
+  }
+
+  VIEWS.invoices = function () {
+    var h = topbar("Invoice Approval", "Vendor invoices checked against orders", backBtn("home", "Home"), syncPill());
+    h += '<main class="page">';
+    if (!canReviewInvoices()) return h + '<div class="empty">Only admins and people with invoice permission can see invoices.</div></main>';
+    if (store.get("invoicesSetupMissing", false)) h += '<div class="notice"><b>Database setup not finished.</b> Run <code>supabase/invoices.sql</code> once in Supabase, then reopen this screen.</div>';
+    h += '<button class="btn primary big block" data-action="inv-upload">' + ICON.plus + "Upload invoices</button>" +
+      '<input type="file" id="inv-file" accept="application/pdf,image/*" multiple hidden>' +
+      '<p class="hint">PDF or a photo. The AI reads each invoice, finds the matching order and flags any line whose price doesn\'t match.</p>';
+    var all = getInvoices(), f = state.invFilter || "attention";
+    h += '<div class="chips">' + INV_FILTERS.map(function (x) {
+      var n = all.filter(x[2]).length;
+      return '<button class="chip' + (f === x[0] ? " on" : "") + '" data-action="inv-filter" data-f="' + x[0] + '">' + esc(x[1]) + (x[0] !== "all" ? " (" + n + ")" : "") + "</button>";
+    }).join("") + "</div>";
+    var fn = (INV_FILTERS.filter(function (x) { return x[0] === f; })[0] || INV_FILTERS[5])[2];
+    var list = all.filter(fn);
+    if (!list.length) h += '<div class="empty">' + (all.length ? "Nothing here." : "No invoices uploaded yet.") + "</div>";
+    else {
+      h += '<div class="tile-list">' + list.map(function (i) {
+        return '<button class="tile inv-tile ' + i.status + '" data-action="open-invoice" data-id="' + esc(i.id) + '"><div class="t-main">' +
+          '<div class="t-title">' + esc(i.vendor_name || i.supplier || i.file_name || "Invoice") + (i.invoice_number ? " · #" + esc(i.invoice_number) : "") + "</div>" +
+          '<div class="t-sub">' + (i.order_number ? "Order " + esc(i.order_number) : i.status === "processing" ? "Reading invoice…" : "No order matched") +
+          (i.total != null ? " · " + fmtMoney(i.total) : "") + "</div>" +
+          '<div class="t-sub">' + invBadge(i.status) + (i.mismatch_count ? ' <b class="neg">' + i.mismatch_count + " line" + (i.mismatch_count === 1 ? "" : "s") + " flagged</b>" : "") +
+          " · " + esc(fmtDate(i.created_at)) + "</div></div><span class=\"chev\">›</span></button>";
+      }).join("") + "</div>";
+    }
+    return h + "</main>";
+  };
+  AFTER.invoices = function () {
+    var inp = document.getElementById("inv-file");
+    if (inp) inp.addEventListener("change", function () {
+      var files = Array.prototype.slice.call(inp.files || []);
+      inp.value = "";
+      if (!files.length) return;
+      if (!navigator.onLine) { toast("Connect to the internet to upload invoices"); return; }
+      toast("Uploading " + files.length + " invoice" + (files.length === 1 ? "" : "s") + "…");
+      Promise.all(files.map(function (f) { return Cloud.uploadInvoice(f).then(null, function (e) { toast(f.name + ": " + (e.message || "upload failed")); }); }))
+        .then(refreshInvoices).then(function () { state.invFilter = "processing"; render(); });
+    });
+    pollInvoices();
+  };
+
+  function orderForInvoice(inv) { return inv && inv.order_id ? getOrder(inv.order_id) : null; }
+
+  VIEWS.invoice = function () {
+    var inv = currentInvoice();
+    if (!inv) return VIEWS.invoices();
+    var ex = inv.extracted || {}, cmp = inv.comparison || {}, rows = cmp.rows || [];
+    var order = orderForInvoice(inv);
+    var h = topbar(inv.invoice_number ? "Invoice #" + inv.invoice_number : "Invoice", inv.vendor_name || inv.supplier || inv.file_name || "", backBtn("invoices", "Invoices"));
+    h += '<main class="page">';
+    h += '<div class="card inv-head ' + inv.status + '">' + invBadge(inv.status) +
+      (inv.status === "processing" ? '<p class="hint" style="margin:8px 0 0">The AI is reading this invoice. This page updates by itself.</p>' : "") +
+      (inv.status === "error" ? '<div class="error-text">' + esc(inv.error || "Something went wrong.") + "</div>" : "") +
+      '<dl class="kv" style="margin-top:10px">' +
+      "<dt>Vendor</dt><dd>" + esc(inv.vendor_name || "-") + (inv.supplier ? " (" + esc(inv.supplier) + ")" : "") + "</dd>" +
+      "<dt>Invoice #</dt><dd>" + esc(inv.invoice_number || "-") + "</dd>" +
+      "<dt>Date</dt><dd>" + esc(inv.invoice_date || "-") + "</dd>" +
+      (ex.po_number ? "<dt>PO / ref</dt><dd>" + esc(ex.po_number) + "</dd>" : "") +
+      "<dt>Total</dt><dd>" + (inv.total != null ? fmtMoney(inv.total) : "-") + (ex.freight ? " (freight " + fmtMoney(ex.freight) + ")" : "") + "</dd>" +
+      "<dt>Uploaded</dt><dd>" + esc(fmtDate(inv.created_at)) + " · " + esc((inv.uploaded_by || "").split("@")[0]) + "</dd>" +
+      (inv.reviewed_by ? "<dt>Reviewed</dt><dd>" + esc(fmtDate(inv.reviewed_at)) + " · " + esc(inv.reviewed_by.split("@")[0]) + "</dd>" : "") +
+      '</dl><button class="btn block" style="margin-top:10px" data-action="inv-view-file">View invoice file</button></div>';
+
+    // order match
+    if (inv.status !== "processing") {
+      h += "<h3>Matched order</h3><div class=\"card\">";
+      if (order || inv.order_number) {
+        h += '<div class="t-title">Order ' + esc(inv.order_number || (order && order.number) || "") + "</div>" +
+          '<div class="t-sub">' + (order ? "Job " + esc(order.jobNumber) + " · " + esc(order.supplier) + " · " + esc(fmtDate(order.createdAt)) : "") +
+          " · matched by " + esc({ order_number: "order # on the invoice", products: "products on the invoice", manual: "you" }[inv.match_method] || "-") + "</div>" +
+          '<div class="btn-row" style="margin-top:10px">' + (order ? '<button class="btn" data-action="inv-open-order">Open order</button>' : "") +
+          '<button class="btn" data-action="inv-change-order">Wrong order?</button></div>';
+      } else {
+        h += '<p class="hint" style="margin-top:0">The AI couldn\'t tell which order this invoice is for. Pick it:</p>' + orderPickerHtml(inv);
+      }
+      h += "</div>";
+    }
+
+    // comparison
+    if (rows.length) {
+      var bad = rows.filter(function (r) { return r.status === "price" || r.status === "not_on_order"; });
+      h += "<h3>Line by line</h3>";
+      h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + " line" + (bad.length === 1 ? "" : "s") + " don't match the order:</b><br>" +
+        bad.map(function (r) { return "• " + esc(r.description) + " - " + (r.status === "price" ? "billed " + fmtMoney(r.inv_price) + " vs order " + fmtMoney(r.ord_price) : "not on the order"); }).join("<br>") + "</div>"
+        : '<div class="notice ok-notice">Every billed line matches the order pricing.</div>';
+      h += '<div class="inv-lines">' + rows.map(invRowHtml).join("") + "</div>";
+    }
+
+    // actions
+    if (inv.status !== "processing") {
+      h += '<h3>Review</h3><div class="card"><label class="field"><span>Notes</span><textarea class="input" id="inv-notes" placeholder="Anything to remember about this invoice">' + esc(inv.notes || "") + "</textarea></label>" +
+        '<div class="btn-row">' +
+        (inv.status !== "approved" ? '<button class="btn brand" data-action="inv-approve">Approve invoice</button>' : "") +
+        (order && inv.status !== "approved" ? '<button class="btn danger" data-action="inv-send-back">Send back to supplier</button>' : "") +
+        '<button class="btn" data-action="inv-rerun">Re-run AI check</button>' +
+        (isAdmin() ? '<button class="btn danger" data-action="inv-delete">Delete</button>' : "") + "</div>" +
+        (inv.sent_back_at ? '<div class="hint" style="margin:8px 0 0">Sent back to supplier ' + esc(fmtDate(inv.sent_back_at)) + ".</div>" : "") + "</div>";
+    }
+    return h + "</main>";
+  };
+  AFTER.invoice = function () {
+    var n = document.getElementById("inv-notes");
+    if (n) n.addEventListener("change", function () {
+      var inv = currentInvoice();
+      Cloud.updateInvoice(inv.id, { notes: n.value }).then(refreshInvoices).then(function () { toast("Notes saved"); }, function (e) { toast(e.message); });
+    });
+    var sel = document.getElementById("inv-order-pick");
+    if (sel) sel.addEventListener("change", function () { document.getElementById("inv-use-order").disabled = !sel.value; });
+    pollInvoices();
+  };
+
+  function orderPickerHtml(inv) {
+    var cands = ((inv.comparison || {}).candidates || []).map(function (c) { return c.id; });
+    var orders = getOrders().filter(function (o) { return o.number && o.status === "sent" && (!inv.supplier || o.supplier === inv.supplier); })
+      .sort(function (a, b) { return (cands.indexOf(b.id) >= 0) - (cands.indexOf(a.id) >= 0) || (a.createdAt < b.createdAt ? 1 : -1); }).slice(0, 200);
+    return '<select class="input" id="inv-order-pick"><option value="">Choose an order…</option>' + orders.map(function (o) {
+      return '<option value="' + esc(o.id) + '">' + esc(o.number + " · Job " + o.jobNumber + " · " + o.supplier + " · " + fmtDate(o.createdAt)) + (cands.indexOf(o.id) >= 0 ? "  ★ likely" : "") + "</option>";
+    }).join("") + '</select><button class="btn primary block" style="margin-top:10px" id="inv-use-order" data-action="inv-use-order" disabled>Compare with this order</button>';
+  }
+
+  function invRowHtml(r) {
+    var cls = { ok: "ok", price: "bad", not_on_order: "bad", not_invoiced: "info", no_price: "info" }[r.status] || "";
+    var label = { ok: "Matches", price: "Price differs", not_on_order: "Not on order", not_invoiced: "Ordered, not billed", no_price: "No price on invoice" }[r.status] || r.status;
+    return '<div class="inv-line ' + cls + '"><div class="il-top"><span class="il-status">' + esc(label) + "</span>" +
+      (r.price_diff ? '<span class="il-diff ' + (r.price_diff > 0 ? "neg" : "pos") + '">' + (r.price_diff > 0 ? "+" : "") + fmtMoney(r.price_diff) + " / " + esc(r.unit || "") + "</span>" : "") + "</div>" +
+      '<div class="il-name">' + esc(r.description) + (r.code ? ' <span class="hint">#' + esc(r.code) + "</span>" : "") + "</div>" +
+      '<div class="il-grid"><div><small>Invoice</small>' + (r.inv_qty != null ? esc(fmtQty(r.inv_qty)) + " × " : "") + (r.inv_price != null ? fmtMoney(r.inv_price) : "-") + "</div>" +
+      "<div><small>Order" + (r.job_price ? ' <span class="job-price">Job price</span>' : "") + "</small>" + (r.ord_qty != null ? esc(fmtQty(r.ord_qty)) + " × " : "") + (r.ord_price != null ? fmtMoney(r.ord_price) : "-") + "</div></div>" +
+      (r.qty_note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.qty_note) + "</div>" : "") +
+      (r.matched_by === "agent" ? '<div class="hint" style="margin:4px 0 0">Matched by the AI from the description</div>' : "") + "</div>";
+  }
+
+  // Send back: email with subject "Incorrect invoice <#>", order PDF + invoice file attached. Only when the reviewer chooses to.
+  function openSendBackSheet(inv) {
+    var order = orderForInvoice(inv);
+    var bad = ((inv.comparison || {}).rows || []).filter(function (r) { return r.status === "price" || r.status === "not_on_order"; });
+    var subject = "Incorrect invoice " + (inv.invoice_number || "");
+    var to = emailFor(inv.supplier || (order && order.supplier)) || "";
+    var body = "Hello,\n\nInvoice " + (inv.invoice_number || "") + " does not match our order " + (order ? order.number : inv.order_number || "") +
+      (order ? " (Job " + order.jobNumber + ")" : "") + ". Please review and send a corrected invoice.\n\n" +
+      (bad.length ? "Lines that don't match:\n" + bad.map(function (r) {
+        return "- " + r.description + (r.code ? " [#" + r.code + "]" : "") + ": " + (r.status === "price"
+          ? "invoiced at " + fmtMoney(r.inv_price) + "/" + (r.unit || "unit") + ", our order price is " + fmtMoney(r.ord_price)
+          : "not on our order");
+      }).join("\n") + "\n\n" : "") + "Our order and your invoice are attached.\n\nThank you,\n" + (myName() || "") + "\nKim Industries";
+    var canShare = !!(navigator.canShare && window.File && navigator.canShare({ files: [new File([""], "a.pdf", { type: "application/pdf" })] }));
+    var h = "<h2>Send invoice back to supplier</h2>" +
+      '<label class="field"><span>To</span><input class="input" id="sb-to" type="email" value="' + esc(to) + '" placeholder="supplier email"></label>' +
+      '<label class="field"><span>Subject</span><input class="input" id="sb-subject" value="' + esc(subject) + '"></label>' +
+      '<label class="field"><span>Message</span><textarea class="input" id="sb-body" style="min-height:180px">' + esc(body) + "</textarea></label>" +
+      '<div class="hint">Attachments: <b>Order ' + esc(order ? order.number : "") + ".pdf</b> and <b>" + esc(inv.file_name || "invoice") + "</b></div>" +
+      '<div class="btn-row" style="margin-top:12px">' +
+      (canShare ? '<button class="btn primary" id="sb-share">Open email with attachments</button>' : "") +
+      '<button class="btn' + (canShare ? "" : " primary") + '" id="sb-mail">' + (canShare ? "Download files + email draft" : "Download attachments + open email") + "</button></div>" +
+      '<p class="hint" style="font-size:13px">' + (canShare ? "Choose your email app, check the message, and send." : "Your email app opens with the subject and message filled in. Attach the two downloaded files, then send.") + "</p>" +
+      '<button class="btn block" data-action="close-sheet">Cancel</button>';
+    openSheet(h, function (sheet) {
+      function files() {
+        var o = JSON.parse(JSON.stringify(order));
+        o.showPricing = true;
+        return Promise.all([buildPdf(o), Cloud.downloadInvoiceFile(inv.file_path)]).then(function (r) {
+          return [new File([r[0]], pdfName(o), { type: "application/pdf" }), new File([r[1]], inv.file_name || "invoice.pdf", { type: inv.file_type || r[1].type || "application/pdf" })];
+        });
+      }
+      function done() {
+        closeSheet();
+        if (!confirm("Did you send the email? Mark this invoice as sent back to the supplier?")) return;
+        Cloud.updateInvoice(inv.id, { status: "sent_back", sent_back_at: new Date().toISOString(), reviewed_by: Cloud.user.email, reviewed_at: new Date().toISOString() })
+          .then(refreshInvoices).then(function () { toast("Marked as sent back"); render(); }, function (e) { toast(e.message); });
+      }
+      var share = sheet.querySelector("#sb-share");
+      if (share) share.addEventListener("click", function () {
+        share.disabled = true;
+        files().then(function (fs) {
+          return navigator.share({ files: fs, title: sheet.querySelector("#sb-subject").value, text: sheet.querySelector("#sb-body").value });
+        }).then(done, function (e) { share.disabled = false; if (!(e && e.name === "AbortError")) toast(e && e.message || "Couldn't open the share sheet"); });
+      });
+      sheet.querySelector("#sb-mail").addEventListener("click", function (e) {
+        e.target.disabled = true;
+        files().then(function (fs) {
+          fs.forEach(function (f) { downloadBlob(f, f.name); });
+          var s2 = sheet.querySelector("#sb-subject").value, b2 = sheet.querySelector("#sb-body").value, t2 = sheet.querySelector("#sb-to").value.trim();
+          setTimeout(function () { location.href = "mailto:" + encodeURIComponent(t2) + "?subject=" + encodeURIComponent(s2) + "&body=" + encodeURIComponent(b2); }, 400);
+          setTimeout(done, 1500);
+        }, function (ex) { e.target.disabled = false; toast(ex.message || "Couldn't prepare the attachments"); });
+      });
+    });
+  }
+
   // ----- users & permissions (admin)
   VIEWS.users = function () {
     var h = topbar("Users & Permissions", "Admin", backBtn("settings", "Settings"));
@@ -2338,6 +2571,7 @@
       '<label class="field"><span>Email <span class="req">*</span></span><input class="input" name="email" type="email" required placeholder="name@kimindustries.com"></label>' +
       '<label class="field"><span>Name</span><input class="input" name="name" placeholder="First and last name"></label>' +
       '<label class="toggle"><input type="checkbox" name="can_edit_shop">Can add / remove shop stock</label>' +
+      '<label class="toggle"><input type="checkbox" name="can_review_invoices">Can review invoices</label>' +
       '<label class="toggle"><input type="checkbox" name="admin">Admin (can manage users)</label>' +
       '<label class="field" style="margin-top:8px"><span>Temporary password (creates their login)</span><input class="input" name="password" type="text" minlength="8" placeholder="At least 8 characters - leave blank if they already have a login"></label>' +
       '<div class="error-text" id="user-error" hidden></div>' +
@@ -2351,7 +2585,7 @@
     document.getElementById("user-form").addEventListener("submit", function (e) {
       e.preventDefault();
       var f = e.target, err = document.getElementById("user-error"), btn = f.querySelector("button[type=submit]");
-      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), can_edit_shop: f.can_edit_shop.checked, role: f.admin.checked ? "admin" : "user" };
+      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), can_edit_shop: f.can_edit_shop.checked, can_review_invoices: f.can_review_invoices.checked, role: f.admin.checked ? "admin" : "user" };
       var pw = f.password.value;
       err.hidden = true;
       if (!u.email) { f.email.focus(); return; }
@@ -2385,6 +2619,7 @@
           (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
           '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + "</div></div></div>" +
           '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + esc(u.email) + '"' + (u.can_edit_shop || u.role === "admin" ? " checked" : "") + (u.role === "admin" ? " disabled" : "") + ">Can add / remove shop stock</label>" +
+          '<label class="toggle"><input type="checkbox" data-user-flag="can_review_invoices" data-email="' + esc(u.email) + '"' + (u.can_review_invoices || u.role === "admin" ? " checked" : "") + (u.role === "admin" ? " disabled" : "") + ">Can review invoices</label>" +
           (self ? "" : '<label class="toggle"><input type="checkbox" data-user-flag="admin" data-email="' + esc(u.email) + '"' + (u.role === "admin" ? " checked" : "") + ">Admin</label>" +
             '<label class="toggle"><input type="checkbox" data-user-flag="blocked" data-email="' + esc(u.email) + '"' + (u.blocked ? " checked" : "") + ">Turn off access</label>") +
           '<div class="btn-row"><button class="btn" data-action="user-password" data-email="' + esc(u.email) + '">Reset password</button>' +
@@ -2552,6 +2787,44 @@
     },
     "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
     "users": function () { go("users"); refreshAccess(); },
+    "invoices": function () { go("invoices"); refreshInvoices().then(function () { if (state.view === "invoices") render(); }); },
+    "inv-upload": function () { document.getElementById("inv-file").click(); },
+    "inv-filter": function (el) { state.invFilter = el.getAttribute("data-f"); render(); },
+    "open-invoice": function (el) { go("invoice", { invoiceId: el.getAttribute("data-id") }); },
+    "inv-view-file": function () {
+      var inv = currentInvoice(), w = window.open("", "_blank");
+      Cloud.invoiceFileUrl(inv.file_path).then(function (u) { if (w) w.location = u; else location.href = u; }, function (e) { if (w) w.close(); toast(e.message); });
+    },
+    "inv-open-order": function () { var inv = currentInvoice(); state.orderId = inv.order_id; go("send"); },
+    "inv-change-order": function () {
+      var inv = currentInvoice();
+      openSheet("<h2>Compare with a different order</h2>" + orderPickerHtml(inv) + '<button class="btn block" style="margin-top:8px" data-action="close-sheet">Cancel</button>', function (sheet) {
+        var sel = sheet.querySelector("#inv-order-pick");
+        sel.addEventListener("change", function () { sheet.querySelector("#inv-use-order").disabled = !sel.value; });
+      });
+    },
+    "inv-use-order": function () {
+      var inv = currentInvoice(), id = document.getElementById("inv-order-pick").value;
+      if (!id) return;
+      closeSheet();
+      Cloud.runInvoiceAgent(inv.id, id).then(refreshInvoices).then(function () { toast("Comparing with the chosen order…"); render(); }, function (e) { toast(e.message); });
+    },
+    "inv-rerun": function () {
+      var inv = currentInvoice();
+      Cloud.runInvoiceAgent(inv.id).then(refreshInvoices).then(function () { toast("AI is re-checking this invoice"); render(); }, function (e) { alert(e.message); });
+    },
+    "inv-approve": function () {
+      var inv = currentInvoice();
+      if (inv.mismatch_count && !confirm(inv.mismatch_count + " line(s) don't match the order. Approve anyway?")) return;
+      Cloud.updateInvoice(inv.id, { status: "approved", reviewed_by: Cloud.user.email, reviewed_at: new Date().toISOString() })
+        .then(refreshInvoices).then(function () { toast("Invoice approved"); render(); }, function (e) { toast(e.message); });
+    },
+    "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
+    "inv-delete": function () {
+      var inv = currentInvoice();
+      if (!confirm("Delete this invoice and its file?")) return;
+      Cloud.deleteInvoice(inv).then(refreshInvoices).then(function () { toast("Invoice deleted"); go("invoices"); }, function (e) { toast(e.message); });
+    },
     "pricing": function () { state.pricingJob = ""; go("pricing"); refreshAccess(); refreshBooks().then(function () { if (state.view === "pricing") render(); }); },
     "open-book": function (el) {
       var b = getBooks().filter(function (x) { return x.id === el.getAttribute("data-id"); })[0];

@@ -380,3 +380,31 @@ details summary { cursor: pointer; padding: 6px 0; }
 .desc-row:last-child { border-bottom: 0; }
 .desc-row input { width: 22px; height: 22px; margin-top: 2px; accent-color: var(--kim-blue); flex: none; }
 .desc-row.unsure { background: var(--warn-bg); }
+
+/* ---------- invoice approval ---------- */
+.inv-badge { display: inline-block; font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.inv-badge.bad { background: #fdecec; color: #a4131a; }
+.inv-badge.warn { background: var(--warn-bg); color: var(--warn); }
+.inv-badge.ok { background: var(--ok-bg); color: var(--ok); }
+.inv-badge.done { background: var(--kim-blue); color: #fff; }
+.inv-badge.sent { background: var(--kim-ink); color: #fff; }
+.inv-badge.busy { background: var(--kim-blue-tint); color: var(--kim-blue); animation: pulse 1.2s infinite; }
+.inv-tile.mismatch { border-left: 5px solid var(--kim-red); }
+.inv-tile.no_order, .inv-tile.error { border-left: 5px solid #e09a1a; }
+.inv-tile.matched { border-left: 5px solid var(--ok); }
+.neg { color: var(--danger); }
+.pos { color: var(--ok); }
+.bad-notice { background: #fdecec; color: #8e1016; border-left: 5px solid var(--kim-red); }
+.ok-notice { background: var(--ok-bg); color: var(--ok); }
+.inv-lines { display: grid; gap: 8px; }
+.inv-line { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+.inv-line.bad { border-color: #f3b6b9; background: #fff7f7; border-left: 5px solid var(--kim-red); }
+.inv-line.ok { border-left: 5px solid var(--ok); }
+.inv-line.info { border-left: 5px solid #b8c2cd; }
+.il-top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 800; }
+.inv-line.bad .il-status { color: #a4131a; }
+.inv-line.ok .il-status { color: var(--ok); }
+.inv-line.info .il-status { color: var(--muted); }
+.il-name { font-weight: 700; margin: 4px 0; overflow-wrap: anywhere; }
+.il-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-weight: 700; }
+.il-grid small { display: block; color: var(--muted); font-weight: 600; font-size: 12px; }
