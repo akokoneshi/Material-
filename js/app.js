@@ -1299,7 +1299,7 @@
       }, function (ex) {
         btn.disabled = false;
         btn.textContent = "Sign In";
-        err.textContent = !navigator.onLine ? "No internet connection. Connect and try again."
+        err.textContent = !navigator.onLine || /fetch|network/i.test(ex && ex.message) ? "Can't reach the server. Check your internet connection and try again."
           : /invalid/i.test(ex && ex.message) ? "Email or password is incorrect." : (ex && ex.message) || "Could not sign in.";
         err.hidden = false;
       });

@@ -8,5 +8,5 @@
  */
 window.APP_CONFIG = {
   supabaseUrl: "https://drhnhpuzrfmlvcmkzmmg.supabase.co",
-  supabaseAnonKey: ""
+  supabaseAnonKey: "sb_publishable_ZilRyEAiV3t2urJzPy7nOg_DijyIo89"
 };
