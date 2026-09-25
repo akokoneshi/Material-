@@ -16,6 +16,9 @@ import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 const USE_GEMINI = !!Deno.env.get("GEMINI_API_KEY");
 // "gemini-flash-latest" always points at Google's current Flash model (free tier).
 const MODEL = Deno.env.get("INVOICE_MODEL") || (USE_GEMINI ? "gemini-flash-latest" : "claude-opus-5");
+// Used when the main Gemini model stays overloaded (503) or rate-limited (429) after retries.
+const GEMINI_BACKUP_MODEL = Deno.env.get("INVOICE_BACKUP_MODEL") || "gemini-flash-lite-latest";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const EFFORT = (Deno.env.get("INVOICE_EFFORT") || "high") as "low" | "medium" | "high" | "xhigh" | "max";
 
 const cors = {
@@ -234,13 +237,30 @@ async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): P
   const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
   if (input.file) parts.push({ inlineData: { mimeType: input.file.mediaType, data: input.file.base64 } });
   parts.push({ text: input.text });
-  const call = (withSchema: boolean) => ai.models.generateContent({
-    model: MODEL,
+  const callModel = (model: string, withSchema: boolean) => ai.models.generateContent({
+    model,
     contents: [{ role: "user", parts: withSchema ? parts : parts.slice(0, -1).concat([{ text: input.text + "\n\nRespond with only JSON matching this JSON Schema:\n" + JSON.stringify(schema) }]) }],
     config: withSchema
       ? { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 32000 }
       : { responseMimeType: "application/json", maxOutputTokens: 32000 },
   });
+  // Busy (503) / rate-limited (429): retry with growing waits, then try the backup model.
+  const call = async (withSchema: boolean) => {
+    let last: unknown;
+    for (const model of [MODEL, GEMINI_BACKUP_MODEL]) {
+      for (const wait of [0, 3000, 8000, 15000]) {
+        if (wait) await sleep(wait);
+        try {
+          return await callModel(model, withSchema);
+        } catch (e) {
+          last = e;
+          const st = (e as { status?: number })?.status;
+          if (st !== 503 && st !== 429 && st !== 500) throw e;
+        }
+      }
+    }
+    throw last;
+  };
   let res;
   try {
     res = await call(true);
@@ -369,7 +389,8 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
   } catch (e) {
     console.error(e);
     const status = (e as { status?: number })?.status;
-    const msg = status === 429 ? "The AI service is busy or the free-tier limit was reached. Try Re-run AI check in a minute."
+    const msg = status === 429 ? "The AI service's free-tier limit was reached. Wait a minute, then tap Re-run AI check."
+      : status === 503 || status === 500 ? "The AI service is overloaded right now (Google's side). Tap Re-run AI check in a few minutes."
       : status ? `AI service error (${status}): ${(e as Error).message}` : String((e as Error)?.message || e);
     await db.from("invoices").update({ status: "error", error: msg, updated_at: new Date().toISOString() }).eq("id", id);
   }
