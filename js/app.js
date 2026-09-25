@@ -602,6 +602,7 @@
       (Cloud.enabled ? '<button class="btn" data-action="shop">' + ICON_SHOP + "Shop Stock</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="pricing">' + ICON.tag + "Special Pricing</button>" : "") +
+      (isAdmin() ? '<button class="btn" data-action="catalog-requests">' + ICON.tag + "Price-list Requests" + (pendingCatalogRequests().length ? " (" + pendingCatalogRequests().length + ")" : "") + "</button>" : "") +
       (canReviewInvoices() ? '<button class="btn" data-action="invoices">' + ICON.list + "Invoice Approval</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
@@ -2649,7 +2650,7 @@
     var units = CAT.units.slice().sort(), cats = CAT.categories.slice().sort();
     h += '<datalist id="cat-list"><option value="Added Items">' + cats.map(function (c) { return '<option value="' + esc(c) + '">'; }).join("") + "</datalist>";
     h += "<h3>Waiting for review (" + pend.length + ")</h3>";
-    if (!pend.length) h += '<div class="empty">Nothing waiting.</div>';
+    if (!pend.length) h += '<div class="empty">Nothing waiting. When someone adds an item manually and ticks <b>Ask to add this to the price list</b>, it shows up here for you to edit and approve.</div>';
     pend.forEach(function (r) {
       h += '<div class="card req-card" data-req="' + esc(r.id) + '"><div class="t-sub">Requested by ' + esc((r.requested_by || "").split("@")[0]) + " · " + esc(fmtDate(r.created_at)) +
         (r.job_number ? " · Job " + esc(r.job_number) : "") + "</div>" +
@@ -2847,7 +2848,7 @@
     if (Cloud.enabled && Cloud.user) {
       h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:4px">' + esc(Cloud.user.email) + "</div>" +
         '<div class="hint" style="margin:0 0 10px">' + (isAdmin() ? "Admin" : canEditShop() ? "Can change shop stock" : "Crew member") + "</div>" +
-        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button>' : "") +
+        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button><button type="button" class="btn brand" data-action="catalog-requests">Price-list Requests</button>' : "") +
         '<button type="button" class="btn" data-action="sign-out">Sign out</button></div></div>';
     }
     h += '<div class="card"><label class="field"><span>Your name (shown on orders)</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name || myName()) + '"></label>' +
