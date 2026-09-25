@@ -109,8 +109,9 @@ node tests/search.test.js
 
 ## Special (job) pricing
 
-Admins manage **price books** under **Special Pricing** (home screen). Each book belongs to one
-supplier and one or more jobs, e.g. "3479, 3557, 3375". When anyone builds an order for one of those jobs,
+Admins manage **price books** under **Special Pricing** (home screen), organized **by job #**. Each book
+belongs to one supplier and one job. A price book that applies to several jobs is copied into each job,
+either by entering several job #s when creating it or with **Copy to another job**. When anyone builds an order for one of those jobs,
 every item that's in one of that job's books automatically uses the job price, with a green **Job price** tag.
 Everything else uses the regular price list. Crews don't have to do anything. If an item appears more than
 once, whether in one book or across a job's books, the **lowest** price wins. Draft orders re-price
@@ -131,4 +132,5 @@ Ask the supplier for a text PDF or Excel.
 
 **One-time setup:** run [`supabase/pricing.sql`](supabase/pricing.sql) (after `shop.sql`).
 The price books sent so far are pre-built in [`supabase/special-pricing/`](supabase/special-pricing/),
-one file per job group. Run each one in the SQL Editor.
+one file per job. Run each one in the SQL Editor. If you already loaded the older shared (multi-job) files, run
+[`supabase/split_books_by_job.sql`](supabase/split_books_by_job.sql) once instead. It gives every job its own copy.

@@ -4,7 +4,7 @@
 
 begin;
 
--- CT-DI · DI quote 10791311 - IBM Quantum (08.07.26) (80 items)
+-- CT-DI · DI quote 10791311 - IBM Quantum (08.07.26) (95 items)
 insert into public.price_books (id, job_number, supplier, name, active) values ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', '3712', 'CT-DI', 'DI quote 10791311 - IBM Quantum (08.07.26)', true)
   on conflict (id) do update set job_number = excluded.job_number, name = excluded.name, active = true, updated_at = now();
 insert into public.price_book_items (book_id, item_key, item_name, unit, price) values
@@ -87,13 +87,7 @@ insert into public.price_book_items (book_id, item_key, item_name, unit, price) 
   ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT18832', '#13 .016 SM ALUM C&R W/POLY 2" LAP NO HEM 42-1/4"', 'LF', 3.5405),
   ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT18840', '#17 .016 SM ALUM C&R W/POLY 3" LAP NO HEM 57"', 'LF', 4.7297),
   ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT18862', '#28 .016 SM ALUM C&R W/POLY 3" LAP NO HEM 92"', 'LF', 13.8419),
-  ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT17727', '.032X36"X50'' ALUM SM W/POLY IDEAL', 'RL', 519.527)
-on conflict (book_id, item_key) do update set price = least(public.price_book_items.price, excluded.price), item_name = excluded.item_name, unit = excluded.unit, updated_at = now();
-
--- CT-DI · DI quote 10791311 - IBM Quantum (08.07.26) (15 items)
-insert into public.price_books (id, job_number, supplier, name, active) values ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', '3712', 'CT-DI', 'DI quote 10791311 - IBM Quantum (08.07.26)', true)
-  on conflict (id) do update set job_number = excluded.job_number, name = excluded.name, active = true, updated_at = now();
-insert into public.price_book_items (book_id, item_key, item_name, unit, price) values
+  ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT17727', '.032X36"X50'' ALUM SM W/POLY IDEAL', 'RL', 519.527),
   ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT08989', '2" X 24" X 48" 3# (48) FSK JM 814 FIBERGLASS BOARD', 'SF', 1.5962),
   ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT09101', '2"X48"X26'' FSK FBGL JOHNS MANVILLE MICROFLEX (104)', 'SF', 4.5095),
   ('10c1ded6-53ca-4250-aa54-5e4d4655c6c9', 'CT-DI|CT19491', '3" ASJ+ TAPE VENTURE (16RL/CS)', 'RL', 25.4),

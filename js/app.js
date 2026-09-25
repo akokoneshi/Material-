@@ -352,7 +352,7 @@
       .then(function () {
         sync.running = false;
         if (sync.again) { sync.again = false; scheduleSync(300); }
-        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "book") render();
+        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book") render();
         else if ((state.view === "build" || state.view === "review") && repriceOrder(currentOrder())) render();
         else if (state.view === "send") render();
         else if (state.view === "review") refreshOrderNumber();
@@ -1770,6 +1770,35 @@
   }
 
   // ----- special pricing (admin)
+  // Books grouped by job number (each book belongs to one job; older shared books show under each of their jobs).
+  function pricingJobs() {
+    var map = {};
+    getBooks().forEach(function (b) {
+      bookJobs(b).forEach(function (j) {
+        var e = map[j] = map[j] || { job: j, books: [], items: 0 };
+        e.books.push(b);
+        e.items += (b.items || []).length;
+      });
+    });
+    return Object.keys(map).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); }).map(function (k) { return map[k]; });
+  }
+
+  VIEWS["pricing-job"] = function () {
+    var job = state.pricingJob;
+    var entry = pricingJobs().filter(function (j) { return j.job === job; })[0];
+    var h = topbar("Job " + job + " special pricing", entry ? entry.books.length + " price book" + (entry.books.length === 1 ? "" : "s") : "", backBtn("pricing", "Special pricing"));
+    h += '<main class="page">';
+    if (!entry) return h + '<div class="empty">No price books for this job.</div></main>';
+    h += '<div class="tile-list">';
+    entry.books.slice().sort(function (a, b) { return a.supplier < b.supplier ? -1 : a.supplier > b.supplier ? 1 : (a.name || "") < (b.name || "") ? -1 : 1; }).forEach(function (b) {
+      h += '<button class="tile" data-action="open-book" data-id="' + esc(b.id) + '"><div class="t-main"><div class="t-title">' + esc(b.supplier) + "</div>" +
+        '<div class="t-sub">' + esc(b.name || "") + '</div><div class="t-sub">' + (b.items || []).length.toLocaleString() + " items" + (b.active ? "" : " · <b>turned off</b>") +
+        " · updated " + esc(fmtDate(b.updated_at)) + "</div></div>" + '<span class="chev">›</span></button>';
+    });
+    h += '</div><button class="btn block" style="margin-top:14px" data-action="new-book-for-job" data-job="' + esc(job) + '">' + ICON.plus + "New price book for Job " + esc(job) + "</button></main>";
+    return h;
+  };
+
   function currentBook() { return getBooks().filter(function (b) { return b.id === state.bookId; })[0] || null; }
 
   VIEWS.pricing = function () {
@@ -1781,18 +1810,21 @@
     }
     h += '<p class="hint" style="margin-top:0">When an order is for a job listed here, items in that job\'s price books use the job price automatically. Everything else uses regular pricing.</p>';
     h += '<div class="card"><h2 style="margin-top:0;font-size:18px">New price book</h2><form id="book-form">' +
-      '<div class="filters"><label class="field"><span>Job # <span class="req">*</span> <small style="font-weight:500;color:var(--muted)">(several: 3479, 3557)</small></span><input class="input" name="job" required autocomplete="off" placeholder="e.g. 2695"></label>' +
+      '<div class="filters"><label class="field"><span>Job # <span class="req">*</span> <small style="font-weight:500;color:var(--muted)">(several jobs: 3479, 3557 - each gets its own copy)</small></span><input class="input" name="job" required autocomplete="off" placeholder="e.g. 2695"></label>' +
       '<label class="field"><span>Supplier <span class="req">*</span></span><select class="input" name="supplier">' + SUPPLIERS.map(function (x) { return "<option>" + esc(x) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field full"><span>Name (optional)</span><input class="input" name="name" placeholder="e.g. Homans Yale pricebook 1.12.26"></label></div>' +
       '<button class="btn primary block" type="submit">' + ICON.plus + "Create price book</button></form></div>";
-    var books = getBooks().slice().sort(function (a, b) { return a.job_number < b.job_number ? -1 : a.job_number > b.job_number ? 1 : a.supplier < b.supplier ? -1 : 1; });
-    h += "<h3>Price books (" + books.length + ")</h3>";
-    if (!books.length) h += '<div class="empty">No special pricing yet.</div>';
+    var jobs = pricingJobs();
+    h += "<h3>Jobs with special pricing (" + jobs.length + ")</h3>";
+    if (!jobs.length) h += '<div class="empty">No special pricing yet.</div>';
     else {
       h += '<div class="tile-list">';
-      books.forEach(function (b) {
-        h += '<button class="tile" data-action="open-book" data-id="' + esc(b.id) + '"><span class="job-badge">Job ' + esc(b.job_number) + '</span><div class="t-main"><div class="t-title">' + esc(b.supplier) + "</div>" +
-          '<div class="t-sub">' + esc(b.name || "") + '</div><div class="t-sub">' + (b.items || []).length.toLocaleString() + " items" + (b.active ? "" : " · <b>turned off</b>") + " · updated " + esc(fmtDate(b.updated_at)) + "</div></div>" +
+      jobs.forEach(function (j) {
+        var sups = {};
+        j.books.forEach(function (bk) { sups[bk.supplier] = 1; });
+        h += '<button class="tile" data-action="open-pricing-job" data-job="' + esc(j.job) + '"><span class="job-badge">Job ' + esc(j.job) + '</span><div class="t-main">' +
+          '<div class="t-title">' + j.books.length + " price book" + (j.books.length === 1 ? "" : "s") + "</div>" +
+          '<div class="t-sub">' + esc(Object.keys(sups).join(", ")) + " · " + j.items.toLocaleString() + " job prices</div></div>" +
           '<span class="chev">›</span></button>';
       });
       h += "</div>";
@@ -1802,14 +1834,20 @@
   AFTER.pricing = function () {
     var f = document.getElementById("book-form");
     if (!f) return;
+    if (state.newBookJob) { f.job.value = state.newBookJob; state.newBookJob = ""; f.name.focus(); }
     f.addEventListener("submit", function (e) {
       e.preventDefault();
       var job = f.job.value.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean).join(", ");
       if (!job) { f.job.focus(); return; }
       var btn = f.querySelector("button");
       btn.disabled = true;
-      Cloud.saveBook({ job_number: job, supplier: f.supplier.value, name: f.name.value.trim() }).then(function (id) {
-        return refreshBooks().then(function () { toast("Price book created"); go("book", { bookId: id }); });
+      var jobs = job.split(", ");
+      // Each job gets its own copy of the book.
+      Promise.all(jobs.map(function (j) { return Cloud.saveBook({ job_number: j, supplier: f.supplier.value, name: f.name.value.trim() }); })).then(function (ids) {
+        return refreshBooks().then(function () {
+          toast(ids.length > 1 ? "Created a price book for each of " + ids.length + " jobs" : "Price book created");
+          if (ids.length > 1) go("pricing"); else go("book", { bookId: ids[0] });
+        });
       }, function (ex) { btn.disabled = false; toast(ex.message || "Couldn't create the book"); });
     });
   };
@@ -1817,14 +1855,15 @@
   VIEWS.book = function () {
     var b = currentBook();
     if (!b) return VIEWS.pricing();
-    var h = topbar("Job " + b.job_number + " · " + b.supplier, b.name || "Price book", backBtn("pricing", "Special pricing"));
+    var h = topbar("Job " + b.job_number + " · " + b.supplier, b.name || "Price book", backBtn("back-to-job", "Job price books"));
     var items = (b.items || []).map(function (x) { return { row: x, it: BY_KEY[x.item_key] }; });
     h += '<main class="page"><div class="btn-row" style="margin-bottom:10px">' +
       '<button class="btn primary" data-action="book-add">' + ICON.plus + "Add item</button>" +
       '<button class="btn brand" data-action="book-import">Import Excel / CSV / PDF</button></div>' +
       '<input type="file" id="book-file" accept=".xlsx,.xls,.csv,.pdf" hidden>' +
       '<div class="card"><label class="toggle"><input type="checkbox" id="book-active"' + (b.active ? " checked" : "") + ">Use this price book for Job " + esc(b.job_number) + "</label>" +
-      '<div class="btn-row"><button class="btn" data-action="book-jobs">Change job #s</button><button class="btn" data-action="book-rename">Rename</button><button class="btn danger" data-action="book-delete">Delete book</button></div></div>';
+      '<div class="btn-row"><button class="btn" data-action="book-copy">Copy to another job</button><button class="btn" data-action="book-jobs">Change job #</button>' +
+      '<button class="btn" data-action="book-rename">Rename</button><button class="btn danger" data-action="book-delete">Delete book</button></div></div>';
     h += '<div class="searchbar"><div class="search-wrap">' + ICON.search +
       '<input class="search-input" id="book-q" type="search" autocomplete="off" placeholder="Search items in this book" value="' + esc(state.bookQuery || "") + '"></div></div>' +
       '<div class="search-meta" style="margin-bottom:8px"><b>' + items.length.toLocaleString() + "</b> items with job pricing</div>" +
@@ -2513,8 +2552,29 @@
     },
     "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
     "users": function () { go("users"); refreshAccess(); },
-    "pricing": function () { go("pricing"); refreshAccess(); refreshBooks().then(function () { if (state.view === "pricing") render(); }); },
-    "open-book": function (el) { go("book", { bookId: el.getAttribute("data-id"), bookQuery: "" }); },
+    "pricing": function () { state.pricingJob = ""; go("pricing"); refreshAccess(); refreshBooks().then(function () { if (state.view === "pricing") render(); }); },
+    "open-book": function (el) {
+      var b = getBooks().filter(function (x) { return x.id === el.getAttribute("data-id"); })[0];
+      if (b && !state.pricingJob) state.pricingJob = bookJobs(b)[0];
+      go("book", { bookId: el.getAttribute("data-id"), bookQuery: "" });
+    },
+    "open-pricing-job": function (el) { go("pricing-job", { pricingJob: el.getAttribute("data-job") }); },
+    "back-to-job": function () {
+      var b = currentBook();
+      go("pricing-job", { pricingJob: state.pricingJob || (b && bookJobs(b)[0]) });
+    },
+    "new-book-for-job": function (el) { state.newBookJob = el.getAttribute("data-job"); go("pricing"); },
+    "book-copy": function () {
+      var b = currentBook(), n = prompt("Copy this price book (" + (b.items || []).length + " prices) to which job #? Several: separate with commas.");
+      if (n == null) return;
+      var jobs = n.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      if (!jobs.length) return;
+      var rows = (b.items || []).map(function (x) { return { item_key: x.item_key, item_name: x.item_name, unit: x.unit, price: +x.price }; });
+      toast("Copying…");
+      Promise.all(jobs.map(function (j) {
+        return Cloud.saveBook({ job_number: j, supplier: b.supplier, name: b.name, active: true }).then(function (id) { return rows.length ? Cloud.upsertBookItems(id, rows) : null; });
+      })).then(refreshBooks).then(function () { toast("Copied to Job " + jobs.join(", ")); render(); }, function (ex) { toast(ex.message || "Copy failed"); });
+    },
     "open-book-back": function () { go("book"); },
     "book-add": function () { go("book-add", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
     "book-import": function () { document.getElementById("book-file").click(); },
@@ -2527,11 +2587,11 @@
       }
     },
     "book-jobs": function () {
-      var b = currentBook(), n = prompt("Job numbers this price book applies to (separate with commas):", b.job_number);
+      var b = currentBook(), n = prompt("Job # for this price book (to use it on more jobs, use Copy to another job):", b.job_number);
       if (n == null) return;
-      n = n.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean).join(", ");
+      n = n.split(/[,;\s]+/).map(function (x) { return x.trim(); }).filter(Boolean)[0];
       if (!n) return;
-      Cloud.saveBook({ id: b.id, job_number: n, supplier: b.supplier, name: b.name, active: b.active }).then(refreshBooks).then(function () { toast("Now applies to Job " + n); render(); }, function (ex) { toast(ex.message); });
+      Cloud.saveBook({ id: b.id, job_number: n, supplier: b.supplier, name: b.name, active: b.active }).then(refreshBooks).then(function () { state.pricingJob = n; toast("Moved to Job " + n); render(); }, function (ex) { toast(ex.message); });
     },
     "book-rename": function () {
       var b = currentBook(), n = prompt("Price book name:", b.name || "");
@@ -2541,7 +2601,7 @@
     "book-delete": function () {
       var b = currentBook();
       if (!confirm("Delete the " + b.supplier + " price book for Job " + b.job_number + "? Orders will go back to regular pricing for its items.")) return;
-      Cloud.deleteBook(b.id).then(refreshBooks).then(function () { toast("Price book deleted"); go("pricing"); }, function (ex) { toast(ex.message); });
+      Cloud.deleteBook(b.id).then(refreshBooks).then(function () { toast("Price book deleted"); go("pricing-job"); }, function (ex) { toast(ex.message); });
     },
     "user-remove": function (el) {
       var email = el.getAttribute("data-email");

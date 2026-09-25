@@ -43,6 +43,20 @@
     return o;
   }
 
+  // Supabase returns at most 1,000 rows per request, so read big tables page by page.
+  // makeQuery() must return a fresh, ordered query each time.
+  function fetchAll(makeQuery, pageSize) {
+    pageSize = pageSize || 1000;
+    var all = [];
+    function page(from) {
+      return makeQuery().range(from, from + pageSize - 1).then(must).then(function (rows) {
+        all = all.concat(rows);
+        return rows.length < pageSize ? all : page(from + pageSize);
+      });
+    }
+    return page(0);
+  }
+
   function must(res) {
     if (res.error) throw res.error;
     return res.data;
@@ -128,8 +142,10 @@
   };
 
   Cloud.listStock = function () {
-    return client.from("shop_stock").select("item_key, item_name, unit, category, model, division, qty, updated_by, updated_at")
-      .order("item_name").limit(5000).then(must);
+    return fetchAll(function () {
+      return client.from("shop_stock").select("item_key, item_name, unit, category, model, division, qty, updated_by, updated_at")
+        .order("item_name").order("item_key").order("division");
+    });
   };
 
   Cloud.stockLog = function (itemKey) {
@@ -192,7 +208,9 @@
     return client.from("price_books").select("id, job_number, job_keys, supplier, name, active, updated_at")
       .order("job_number").then(must).then(function (books) {
         if (!books.length) return books;
-        return client.from("price_book_items").select("book_id, item_key, item_name, unit, price").limit(50000).then(must)
+        return fetchAll(function () {
+          return client.from("price_book_items").select("book_id, item_key, item_name, unit, price").order("book_id").order("item_key");
+        })
           .then(function (items) {
             var byBook = {};
             items.forEach(function (it) { (byBook[it.book_id] = byBook[it.book_id] || []).push(it); });
