@@ -1,6 +1,7 @@
 // Supabase Edge Function: lets an app admin create a login for a new crew member.
-// Deploy: Dashboard > Edge Functions > Deploy a new function > Via Editor,
-// name it "admin-users", paste this file, Deploy.
+// Deploy: Dashboard > Edge Functions > (your function) > Code: replace ALL of index.ts with this file,
+// click Deploy, then in the function's Settings turn OFF "Verify JWT" (this code checks the caller itself).
+// The function's name must match adminFunction in js/config.js.
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const cors = {
@@ -17,7 +18,13 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
     const url = Deno.env.get("SUPABASE_URL")!;
-    const service = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    // Newer projects expose sb_secret_ keys as SUPABASE_SECRET_KEYS (JSON); older ones SUPABASE_SERVICE_ROLE_KEY.
+    let adminKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    if (!adminKey) {
+      try { adminKey = Object.values(JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}"))[0] as string || ""; } catch { /* ignore */ }
+    }
+    if (!adminKey) return reply({ error: "Function has no service key available" }, 500);
+    const service = createClient(url, adminKey);
 
     // Who is calling?
     const token = (req.headers.get("Authorization") || "").replace(/^Bearer /i, "");

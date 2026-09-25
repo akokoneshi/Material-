@@ -165,13 +165,20 @@
 
   // Calls the admin-users Edge Function (create a login / reset a password).
   Cloud.adminUsers = function (body) {
-    return client.functions.invoke("admin-users", { body: body }).then(function (res) {
+    return client.functions.invoke(cfg.adminFunction || "admin-users", { body: body }).then(function (res) {
       if (res.error) {
-        var ctx = res.error.context;
-        if (ctx && typeof ctx.json === "function") {
-          return ctx.json().then(function (j) { throw new Error(j.error || res.error.message); }, function () { throw res.error; });
+        var err = res.error, ctx = err.context, status = ctx && ctx.status;
+        var fail = function (msg) { var e = new Error(msg); e.fnStatus = status; e.fnKind = err.name; throw e; };
+        if (err.name === "FunctionsFetchError") {
+          fail("Couldn't reach the \"" + (cfg.adminFunction || "admin-users") + "\" function. In Supabase > Edge Functions > " + (cfg.adminFunction || "admin-users") + ", turn OFF \"Verify JWT\".");
         }
-        throw res.error;
+        if (status === 404) fail("Supabase has no Edge Function named \"" + (cfg.adminFunction || "admin-users") + "\". Check the name in js/config.js.");
+        if (ctx && typeof ctx.json === "function") {
+          return ctx.json().then(function (j) {
+            fail((j && (j.error || j.message || j.msg)) || err.message + (status ? " (" + status + ")" : ""));
+          }, function () { fail(err.message + (status ? " (" + status + ")" : "")); });
+        }
+        fail(err.message);
       }
       if (res.data && res.data.error) throw new Error(res.data.error);
       return res.data;

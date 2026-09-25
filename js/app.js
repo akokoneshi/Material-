@@ -1719,7 +1719,7 @@
         });
       }).catch(function (ex) {
         var m = ex && ex.message || "Couldn't save";
-        if (/Failed to send|FunctionsFetchError|not found|404/i.test(m)) m = "Couldn't create the login: the admin-users function isn't set up in Supabase yet. Permissions were not saved. Leave the password blank to save permissions only, and create the login in Supabase > Authentication > Users.";
+        m = "Login not created, nothing saved: " + m;
         err.textContent = m;
         err.hidden = false;
       }).then(function () { btn.disabled = false; });
@@ -1916,7 +1916,7 @@
       if (pw == null) return;
       if (pw.length < 8) { toast("Password must be at least 8 characters"); return; }
       Cloud.adminUsers({ action: "reset-password", email: email, password: pw }).then(function () { toast("Password changed"); }, function (e) {
-        toast(/Failed to send|FunctionsFetchError|404/i.test(e.message || "") ? "Set up the admin-users function in Supabase first" : e.message || "Couldn't change password");
+        alert("Password not changed: " + (e.message || "unknown error"));
       });
     },
     "sync-now": function () { syncNow().then(function () { if (sync.state === "synced") toast("Up to date"); }); },

@@ -8,5 +8,7 @@
  */
 window.APP_CONFIG = {
   supabaseUrl: "https://drhnhpuzrfmlvcmkzmmg.supabase.co",
-  supabaseAnonKey: "sb_publishable_ZilRyEAiV3t2urJzPy7nOg_DijyIo89"
+  supabaseAnonKey: "sb_publishable_ZilRyEAiV3t2urJzPy7nOg_DijyIo89",
+  // Name of the Edge Function deployed from supabase/functions/admin-users/index.ts
+  adminFunction: "swift-processor"
 };
