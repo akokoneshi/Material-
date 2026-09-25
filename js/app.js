@@ -46,15 +46,172 @@
   function getOrders() { return store.get("orders", []); }
   function saveOrders(list) { store.set("orders", list); }
   function getOrder(id) { return getOrders().filter(function (o) { return o.id === id; })[0] || null; }
+  // Every change is saved on the device first (works with no signal), marked dirty,
+  // and pushed to the shared database by syncNow().
   function putOrder(order) {
     order.updatedAt = new Date().toISOString();
+    order.dirty = true;
     var list = getOrders(), found = false;
     for (var i = 0; i < list.length; i++) if (list[i].id === order.id) { list[i] = order; found = true; }
     if (!found) list.unshift(order);
     saveOrders(list);
+    scheduleSync();
   }
-  function deleteOrder(id) { saveOrders(getOrders().filter(function (o) { return o.id !== id; })); }
+  function deleteOrder(id) {
+    saveOrders(getOrders().filter(function (o) { return o.id !== id; }));
+    if (Cloud.enabled) {
+      var del = store.get("pendingDeletes", []);
+      del.push(id);
+      store.set("pendingDeletes", del);
+      scheduleSync();
+    }
+  }
   function settings() { return store.get("settings", { name: "", phone: "", supplierEmails: {} }); }
+  function myName() {
+    var s = settings();
+    if (s.name) return s.name;
+    var u = Cloud.user;
+    if (u) return (u.user_metadata && (u.user_metadata.full_name || u.user_metadata.name)) || u.email.split("@")[0];
+    return "";
+  }
+  // Job numbers recently ordered against (by anyone, when the shared database is on).
+  function recentJobs() {
+    var seen = {}, out = [];
+    store.get("recentJobs", []).concat(getOrders()).forEach(function (j) {
+      var k = String(j.jobNumber || "").trim().toUpperCase();
+      if (!k || seen[k] || out.length >= 8) return;
+      seen[k] = 1;
+      out.push({ jobNumber: j.jobNumber, jobName: j.jobName });
+    });
+    return out;
+  }
+  function supplierEmails() { return Cloud.enabled ? store.get("supplierEmails", {}) : (settings().supplierEmails || {}); }
+
+  // ---------------------------------------------------------------- sync
+  var sync = { state: Cloud.enabled ? "idle" : "local", timer: null, running: false, again: false };
+
+  function scheduleSync(delay) {
+    if (!Cloud.enabled) return;
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(syncNow, delay == null ? 1200 : delay);
+  }
+
+  function setSyncState(s) {
+    sync.state = s;
+    var el = document.getElementById("sync-pill");
+    if (el) el.outerHTML = syncPill();
+  }
+
+  function syncNow() {
+    if (!Cloud.enabled || !Cloud.user) return Promise.resolve();
+    if (sync.running) { sync.again = true; return Promise.resolve(); }
+    if (!navigator.onLine) { setSyncState(pendingCount() ? "offline" : "idle"); return Promise.resolve(); }
+    sync.running = true;
+    setSyncState("syncing");
+    var chain = Promise.resolve();
+
+    store.get("pendingDeletes", []).forEach(function (id) {
+      chain = chain.then(function () { return Cloud.deleteOrder(id); }).then(function () {
+        store.set("pendingDeletes", store.get("pendingDeletes", []).filter(function (x) { return x !== id; }));
+      });
+    });
+
+    getOrders().filter(function (o) { return o.dirty; }).forEach(function (snap) {
+      chain = chain.then(function () {
+        var o = getOrder(snap.id);
+        if (!o || !o.dirty) return;
+        var numbered = o.number ? Promise.resolve(o.number) : Cloud.nextOrderNumber(o.jobNumber);
+        return numbered.then(function (num) {
+          o = getOrder(snap.id) || o;
+          o.number = num;
+          return Cloud.pushOrder(o).then(function () {
+            // Only clear the flag if nobody edited the order while it was uploading.
+            var list = getOrders();
+            list.forEach(function (x) {
+              if (x.id === o.id) {
+                x.number = num;
+                if (x.updatedAt === o.updatedAt) delete x.dirty;
+              }
+            });
+            saveOrders(list);
+          });
+        });
+      });
+    });
+
+    chain = chain.then(function () { return Cloud.pullOrders(); }).then(mergeRemote)
+      .then(function () {
+        return Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ });
+      })
+      .then(function () {
+        store.set("lastSync", new Date().toISOString());
+        setSyncState(pendingCount() ? "offline" : "synced");
+      }, function (err) {
+        console.warn("Sync failed", err);
+        setSyncState("error");
+      })
+      .then(function () {
+        sync.running = false;
+        if (sync.again) { sync.again = false; scheduleSync(300); }
+        if (state.view === "home" || state.view === "history") render();
+        else if (state.view === "send") render();
+        else if (state.view === "review") refreshOrderNumber();
+      });
+    return chain;
+  }
+
+  function mergeRemote(remote) {
+    var local = getOrders();
+    var byId = {};
+    local.forEach(function (o) { byId[o.id] = o; });
+    var deleted = store.get("pendingDeletes", []);
+    var remoteIds = {};
+    var merged = [];
+    remote.forEach(function (r) {
+      remoteIds[r.id] = 1;
+      if (deleted.indexOf(r.id) >= 0) return;
+      var l = byId[r.id];
+      merged.push(l && l.dirty ? l : r);
+    });
+    // Keep local orders that haven't been uploaded yet; drop ones deleted by someone else.
+    var oldest = remote.length >= 1000 ? remote[remote.length - 1].updatedAt : "";
+    local.forEach(function (l) {
+      if (remoteIds[l.id]) return;
+      if (l.dirty || (oldest && l.updatedAt < oldest)) merged.push(l);
+    });
+    merged.sort(function (a, b) { return a.updatedAt < b.updatedAt ? 1 : -1; });
+    saveOrders(merged);
+  }
+
+  function pendingCount() {
+    return getOrders().filter(function (o) { return o.dirty; }).length + store.get("pendingDeletes", []).length;
+  }
+
+  function syncPill() {
+    if (!Cloud.enabled) return '<span id="sync-pill"></span>';
+    var s = sync.state, n = pendingCount();
+    var map = {
+      idle: ["", "Ready"],
+      syncing: ["busy", "Syncing…"],
+      synced: ["ok", "Synced"],
+      offline: ["warn", n + " waiting · offline"],
+      error: ["warn", "Sync issue · retry"]
+    };
+    var m = map[s] || map.idle;
+    return '<button id="sync-pill" class="sync-pill ' + m[0] + '" data-action="sync-now" title="Sync with the office">' +
+      '<span class="dot"></span>' + esc(m[1]) + "</button>";
+  }
+
+  function refreshOrderNumber() {
+    var o = currentOrder();
+    document.querySelectorAll("[data-order-number]").forEach(function (el) { el.textContent = orderNo(o); });
+  }
+  function orderNo(o) { return o && o.number ? o.number : "Number assigned when online"; }
+
+  window.addEventListener("online", function () { scheduleSync(200); });
+  window.addEventListener("offline", function () { setSyncState(pendingCount() ? "offline" : "idle"); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) scheduleSync(200); });
+  setInterval(function () { if (!document.hidden) scheduleSync(0); }, 60000);
 
   // ---------------------------------------------------------------- helpers
   function esc(s) {
@@ -171,11 +328,13 @@
 
   // ----- home
   VIEWS.home = function () {
-    var orders = getOrders();
-    var drafts = orders.filter(function (o) { return o.status === "draft"; });
-    var h = topbar("Material Orders", "Field ordering",
-      '<span style="width:8px"></span>',
-      '<button class="icon-btn" data-action="settings" aria-label="Settings">' + ICON.gear + "</button>");
+    var me = Cloud.user ? Cloud.user.email : "";
+    var drafts = getOrders().filter(function (o) {
+      return o.status === "draft" && (!Cloud.enabled || !o.createdBy || o.createdBy === me);
+    });
+    var h = '<header class="topbar home-top"><img class="top-logo" src="assets/kim-logo.png" alt="Kim Industries">' +
+      '<h1>Material Orders<span class="sub">' + esc(myName() ? "Hi, " + myName() : "Field ordering") + "</span></h1>" +
+      syncPill() + '<button class="icon-btn" data-action="settings" aria-label="Settings">' + ICON.gear + "</button></header>";
     h += '<main class="page">';
     h += '<div class="home-actions">' +
       '<button class="btn primary big block" data-action="new-order">' + ICON.plus + "New Material Order</button>" +
@@ -184,7 +343,7 @@
       '<button class="btn" data-action="history">' + ICON.list + "Order History</button>" +
       "</div></div>";
     if (drafts.length) {
-      h += "<h3>Continue a draft</h3><div class=\"tile-list\">";
+      h += "<h3>" + (Cloud.enabled ? "Your drafts" : "Continue a draft") + '</h3><div class="tile-list">';
       drafts.slice(0, 5).forEach(function (o) { h += orderTile(o); });
       h += "</div>";
     }
@@ -199,7 +358,8 @@
     return '<button class="tile" data-action="open-order" data-id="' + esc(o.id) + '"><div class="t-main">' +
       '<div class="t-title">Job ' + esc(o.jobNumber) + (o.jobName ? " · " + esc(o.jobName) : "") + "</div>" +
       '<div class="t-sub">' + esc(o.supplier) + " · " + n + " item" + (n === 1 ? "" : "s") + " · " + fmtMoney(orderTotal(o)) + "</div>" +
-      '<div class="t-sub">' + esc(o.number) + " · " + esc(fmtDate(o.updatedAt)) + "</div>" +
+      '<div class="t-sub">' + esc(orderNo(o)) + (o.createdByName ? " · " + esc(o.createdByName) : "") + " · " + esc(fmtDate(o.updatedAt)) + "</div>" +
+      (o.dirty && Cloud.enabled ? '<div class="t-sub unsynced">Not yet synced to office</div>' : "") +
       '</div><span class="badge ' + (o.status === "draft" ? "draft" : "sent") + '">' + (o.status === "draft" ? "Draft" : "Sent") + "</span></button>";
   }
 
@@ -221,7 +381,7 @@
   // ----- step 2: job number
   VIEWS.job = function () {
     var d = state.draft || {};
-    var recent = store.get("recentJobs", []);
+    var recent = recentJobs();
     var h = topbar("New Material Order", "Step 2 of 2 · " + d.supplier, backBtn("to-supplier"));
     h += '<main class="page"><div class="step">Step 2 of 2</div><h2>Enter the job number</h2>' +
       '<p class="hint">Ordering from <b>' + esc(d.supplier) + '</b>. <button class="link-btn" style="color:var(--focus);min-height:0;padding:0" data-action="to-supplier">Change</button></p>' +
@@ -266,12 +426,14 @@
     var s = settings();
     var order = {
       id: uid(),
-      number: newOrderNumber(jobNumber),
+      number: Cloud.enabled ? null : newOrderNumber(jobNumber),
+      createdBy: Cloud.user ? Cloud.user.email : "",
+      createdByName: myName(),
       status: "draft",
       supplier: supplier,
       jobNumber: jobNumber,
       jobName: jobName,
-      requestedBy: s.name || "",
+      requestedBy: myName(),
       phone: s.phone || "",
       needBy: "",
       delivery: "deliver",
@@ -282,6 +444,7 @@
       createdAt: new Date().toISOString()
     };
     putOrder(order);
+    scheduleSync(0);
     var recent = store.get("recentJobs", []).filter(function (j) { return j.jobNumber !== jobNumber; });
     recent.unshift({ jobNumber: jobNumber, jobName: jobName });
     store.set("recentJobs", recent.slice(0, 6));
@@ -696,7 +859,7 @@
     if (!o) return VIEWS.home();
     var h = topbar("Review Order", "Job " + o.jobNumber + " · " + o.supplier, backBtn("to-build", "Back to materials"));
     h += '<main class="page">';
-    h += '<div class="card"><dl class="kv"><dt>Order #</dt><dd>' + esc(o.number) + "</dd><dt>Supplier</dt><dd>" + esc(o.supplier) +
+    h += '<div class="card"><dl class="kv"><dt>Order #</dt><dd data-order-number>' + esc(orderNo(o)) + "</dd><dt>Supplier</dt><dd>" + esc(o.supplier) +
       "</dd><dt>Job #</dt><dd>" + esc(o.jobNumber) + "</dd>" + (o.jobName ? "<dt>Job name</dt><dd>" + esc(o.jobName) + "</dd>" : "") + "</dl></div>";
 
     h += '<h3>Materials (' + o.lines.length + ")</h3><div class=\"card\">";
@@ -780,22 +943,29 @@
     var o = currentOrder();
     if (!o) return VIEWS.home();
     var editable = o.status === "draft";
-    var h = topbar("Order " + o.number, "Job " + o.jobNumber + " · " + o.supplier, backBtn(editable ? "to-review" : "history", "Back"));
+    var ready = !!o.number;
+    var canSharePdf = !!(navigator.canShare && window.File && navigator.canShare({ files: [new File([""], "x.pdf", { type: "application/pdf" })] }));
+    var h = topbar(o.number ? "Order " + o.number : "New order (# pending)", "Job " + o.jobNumber + " · " + o.supplier, backBtn(editable ? "to-review" : "history", "Back"), syncPill());
     h += '<main class="page">';
-    h += '<div class="card" style="text-align:center"><div style="font-size:40px">✅</div><h2 style="margin-top:0">' +
+    h += '<div class="card done-card"><div class="done-icon">' + (o.status === "sent" ? "✓" : "➜") + '</div><h2 style="margin-top:0">' +
       (o.status === "sent" ? "Order sent" : "Order ready to send") + "</h2>" +
-      '<div class="hint">' + o.lines.length + " items · " + (o.showPricing ? "Est. " + fmtMoney(orderTotal(o)) : "pricing hidden") + "</div>" +
+      '<div class="hint">' + o.lines.length + " item" + (o.lines.length === 1 ? "" : "s") + " · " + (o.showPricing ? "Est. " + fmtMoney(orderTotal(o)) : "pricing hidden") + "</div>" +
       '<label class="toggle" style="justify-content:center"><input type="checkbox" id="send-pricing"' + (o.showPricing ? " checked" : "") + ">Include listed pricing</label></div>";
-    h += '<div class="tile-list">' +
-      sendTile("email", "Email to supplier", emailFor(o.supplier) ? "To " + emailFor(o.supplier) : "Opens your email app") +
-      (navigator.share ? sendTile("share", "Share / Text", "Send with any app on this phone") : "") +
-      sendTile("print", "Print or save as PDF", "Printable purchase order") +
+    if (!ready) {
+      h += '<div class="notice">This order gets its number (' + esc(o.jobNumber) + "-00#) as soon as the phone is back online. Sending is available after that.</div>";
+    }
+    h += '<div class="tile-list' + (ready ? "" : " disabled") + '">' +
+      (canSharePdf ? sendTile("share-pdf", "Send PDF (email / text)", "Kim Industries PDF, attached with any app") : "") +
+      sendTile("email", "Email to supplier", emailFor(o.supplier) ? "To " + emailFor(o.supplier) + " · order in the email body" : "Opens your email app · order in the email body") +
+      sendTile("pdf", "Download PDF", "Kim Industries purchase order") +
+      sendTile("print", "Print", "Printable purchase order") +
+      (navigator.share ? sendTile("share", "Share as text", "Send with any app on this phone") : "") +
       sendTile("copy", "Copy order text", "Paste into a text or email") +
       sendTile("csv", "Download spreadsheet (CSV)", "Opens in Excel") +
       "</div>";
-    h += '<h3>Preview</h3><div class="card" style="overflow:auto"><pre style="white-space:pre-wrap;margin:0;font-size:13px">' + esc(orderText(o)) + "</pre></div>";
+    h += '<h3>Preview</h3><div class="card preview-card"><div class="po-preview">' + printHtml(o) + "</div></div>";
     h += '<div class="btn-row" style="margin:16px 0 40px">' +
-      (o.status === "sent" ? '<button class="btn" data-action="reopen">Edit order</button>' : '<button class="btn brand" data-action="mark-sent">Mark as sent</button>') +
+      (o.status === "sent" ? '<button class="btn" data-action="reopen">Edit order</button>' : '<button class="btn brand" data-action="mark-sent"' + (ready ? "" : " disabled") + ">Mark as sent</button>") +
       '<button class="btn" data-action="duplicate">Reorder (copy)</button><button class="btn" data-action="home">Done</button></div>';
     h += "</main>";
     return h;
@@ -812,11 +982,11 @@
     return '<button class="tile" data-action="send" data-kind="' + kind + '"><div class="t-main"><div class="t-title">' + esc(title) +
       '</div><div class="t-sub">' + esc(sub) + "</div></div><span class=\"chev\">›</span></button>";
   }
-  function emailFor(supplier) { return (settings().supplierEmails || {})[supplier] || ""; }
+  function emailFor(supplier) { return supplierEmails()[supplier] || ""; }
 
   function orderText(o) {
     var p = o.showPricing;
-    var t = "MATERIAL ORDER " + o.number + "\n" +
+    var t = "KIM INDUSTRIES - MATERIAL ORDER " + o.number + "\n" +
       "Supplier: " + o.supplier + "\n" +
       "Job #: " + o.jobNumber + (o.jobName ? " - " + o.jobName : "") + "\n" +
       "Date: " + fmtDate(o.createdAt) + "\n" +
@@ -855,15 +1025,21 @@
     return rows.map(function (r) { return r.map(csvCell).join(","); }).join("\r\n");
   }
 
+  function deliveryText(o) {
+    return o.delivery === "pickup" ? "Will call / pickup" : "Deliver to job" + (o.deliverTo ? " - " + o.deliverTo.replace(/\n/g, ", ") : "");
+  }
+
   function printHtml(o) {
     var p = o.showPricing;
-    var h = '<div class="po"><div class="po-head"><div><h1>Material Order</h1><div>Order # <b>' + esc(o.number) + "</b></div><div>Date: " + esc(fmtDate(o.createdAt)) + "</div></div>" +
-      "<div><div><b>Supplier:</b> " + esc(o.supplier) + "</div><div><b>Job #:</b> " + esc(o.jobNumber) + "</div>" +
-      (o.jobName ? "<div><b>Job name:</b> " + esc(o.jobName) + "</div>" : "") +
+    var h = '<div class="po"><div class="po-brand"><img src="assets/kim-logo.png" alt="Kim Industries">' +
+      '<div class="po-title"><h1>Material Order</h1><div>Order # <b>' + esc(orderNo(o)) + "</b></div><div>Date: " + esc(fmtDate(o.createdAt)) + "</div></div></div>" +
+      '<div class="po-rule"></div><div class="po-head"><div>' +
+      "<div><b>Supplier:</b> " + esc(o.supplier) + "</div><div><b>Job #:</b> " + esc(o.jobNumber) + "</div>" +
+      (o.jobName ? "<div><b>Job name:</b> " + esc(o.jobName) + "</div>" : "") + "</div><div>" +
       (o.requestedBy ? "<div><b>Requested by:</b> " + esc(o.requestedBy) + (o.phone ? " · " + esc(o.phone) : "") + "</div>" : "") +
       (o.needBy ? "<div><b>Needed by:</b> " + esc(fmtDate(o.needBy)) + "</div>" : "") +
-      "<div><b>Delivery:</b> " + (o.delivery === "pickup" ? "Will call / pickup" : "Deliver to job" + (o.deliverTo ? " - " + esc(o.deliverTo) : "")) + "</div></div></div>" +
-      "<table><thead><tr><th>#</th><th class=\"num\">Qty</th><th>Unit</th><th>Description</th><th>Model #</th>" + (p ? '<th class="num">Unit Price</th><th class="num">Ext</th>' : "") + "</tr></thead><tbody>";
+      "<div><b>Delivery:</b> " + esc(deliveryText(o)) + "</div></div></div>" +
+      '<table><thead><tr><th>#</th><th class="num">Qty</th><th>Unit</th><th>Description</th><th>Model #</th>' + (p ? '<th class="num">Unit Price</th><th class="num">Ext</th>' : "") + "</tr></thead><tbody>";
     o.lines.forEach(function (l, i) {
       h += "<tr><td>" + (i + 1) + '</td><td class="num">' + esc(fmtQty(l.qty)) + "</td><td>" + esc(l.unit) + "</td><td>" + esc(l.name) + "</td><td>" + esc(l.model || "") + "</td>" +
         (p ? '<td class="num">' + (l.price > 0 ? fmtMoney(l.price) : "TBD") + '</td><td class="num">' + (l.price > 0 ? fmtMoney(lineTotal(l)) : "") + "</td>" : "") + "</tr>";
@@ -874,34 +1050,169 @@
     return h;
   }
 
+  // ----- PDF (Kim Industries branded)
+  var logoData = null;
+  function loadLogo() {
+    if (logoData) return Promise.resolve(logoData);
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext("2d").drawImage(img, 0, 0);
+        logoData = { url: c.toDataURL("image/png"), w: img.naturalWidth, h: img.naturalHeight };
+        resolve(logoData);
+      };
+      img.onerror = reject;
+      img.src = "assets/kim-logo.png";
+    });
+  }
+
+  function pdfName(o) { return "Kim-Industries_Material-Order_" + String(o.number || o.jobNumber).replace(/[^\w-]+/g, "_") + ".pdf"; }
+
+  function buildPdf(o) {
+    return loadLogo().then(function (logo) {
+      var BLUE = [27, 117, 188], RED = [237, 28, 36], INK = [35, 31, 32], GREY = [95, 105, 118];
+      var doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
+      var W = doc.internal.pageSize.getWidth(), M = 40, p = o.showPricing;
+      var lw = 92, lh = lw * logo.h / logo.w;
+      doc.addImage(logo.url, "PNG", M, 30, lw, lh);
+      doc.setTextColor.apply(doc, INK);
+      doc.setFont("helvetica", "bold").setFontSize(22).text("MATERIAL ORDER", W - M, 58, { align: "right" });
+      doc.setFont("helvetica", "normal").setFontSize(11).setTextColor.apply(doc, GREY);
+      doc.text("Order #", W - M - 110, 80);
+      doc.text("Date", W - M - 110, 96);
+      doc.setTextColor.apply(doc, INK).setFont("helvetica", "bold");
+      doc.text(orderNo(o), W - M, 80, { align: "right" });
+      doc.text(fmtDate(o.createdAt), W - M, 96, { align: "right" });
+      var y = Math.max(30 + lh, 100) + 14;
+      doc.setFillColor.apply(doc, BLUE).rect(M, y, W - 2 * M - 70, 4, "F");
+      doc.setFillColor.apply(doc, RED).rect(W - M - 66, y, 66, 4, "F");
+      y += 24;
+
+      function field(label, value, x, yy, width) {
+        doc.setFont("helvetica", "normal").setFontSize(9).setTextColor.apply(doc, GREY).text(label.toUpperCase(), x, yy);
+        doc.setFont("helvetica", "bold").setFontSize(11).setTextColor.apply(doc, INK);
+        var lines = doc.splitTextToSize(value || "-", width);
+        doc.text(lines, x, yy + 14);
+        return yy + 14 + lines.length * 13 + 8;
+      }
+      var colW = (W - 2 * M - 20) / 2, x2 = M + colW + 20;
+      var yl = y, yr = y;
+      yl = field("Supplier", o.supplier, M, yl, colW);
+      yl = field("Job #", o.jobNumber + (o.jobName ? "  -  " + o.jobName : ""), M, yl, colW);
+      if (o.requestedBy || o.phone) yr = field("Requested by", (o.requestedBy || "") + (o.phone ? "  ·  " + o.phone : ""), x2, yr, colW);
+      if (o.needBy) yr = field("Needed by", fmtDate(o.needBy), x2, yr, colW);
+      yr = field("Delivery", deliveryText(o), x2, yr, colW);
+      y = Math.max(yl, yr) + 4;
+
+      var head = ["#", "Qty", "Unit", "Description", "Model #"];
+      if (p) head.push("Unit Price", "Ext");
+      var body = o.lines.map(function (l, i) {
+        var r = [i + 1, fmtQty(l.qty), l.unit, l.name, l.model || ""];
+        if (p) r.push(l.price > 0 ? fmtMoney(l.price) : "TBD", l.price > 0 ? fmtMoney(lineTotal(l)) : "");
+        return r;
+      });
+      var colStyles = { 0: { cellWidth: 24 }, 1: { halign: "right", cellWidth: 44 }, 2: { cellWidth: 36 }, 4: { cellWidth: 82 } };
+      if (p) { colStyles[5] = { halign: "right", cellWidth: 62 }; colStyles[6] = { halign: "right", cellWidth: 68 }; }
+      window.autoTable(doc, {
+        head: [head], body: body, startY: y, margin: { left: M, right: M, bottom: 50 },
+        styles: { font: "helvetica", fontSize: 9.5, cellPadding: 5, textColor: INK, lineColor: [215, 222, 230], lineWidth: 0.5 },
+        headStyles: { fillColor: BLUE, textColor: 255, fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [244, 248, 252] },
+        columnStyles: colStyles
+      });
+      y = doc.lastAutoTable.finalY + 18;
+      var H = doc.internal.pageSize.getHeight();
+      function room(n) { if (y + n > H - 60) { doc.addPage(); y = 50; } }
+      if (p) {
+        room(24);
+        doc.setFont("helvetica", "bold").setFontSize(13).setTextColor.apply(doc, INK);
+        doc.text("Estimated total:  " + fmtMoney(orderTotal(o)), W - M, y, { align: "right" });
+        y += 22;
+        if (o.lines.some(function (l) { return !(l.price > 0); })) {
+          doc.setFont("helvetica", "normal").setFontSize(9).setTextColor.apply(doc, GREY).text("Items marked TBD are not included in the total.", W - M, y, { align: "right" });
+          y += 16;
+        }
+      }
+      if (o.notes) {
+        var nl = doc.splitTextToSize(o.notes, W - 2 * M);
+        room(24 + nl.length * 13);
+        doc.setFont("helvetica", "bold").setFontSize(10).setTextColor.apply(doc, INK).text("Notes", M, y);
+        doc.setFont("helvetica", "normal").text(nl, M, y + 14);
+        y += 20 + nl.length * 13;
+      }
+      room(70);
+      y += 40;
+      doc.setDrawColor.apply(doc, INK).setLineWidth(0.7);
+      doc.line(M, y, M + 220, y);
+      doc.line(W - M - 220, y, W - M, y);
+      doc.setFont("helvetica", "normal").setFontSize(9).setTextColor.apply(doc, GREY);
+      doc.text("Ordered by", M, y + 12);
+      doc.text("Received by / date", W - M - 220, y + 12);
+
+      var pages = doc.getNumberOfPages();
+      for (var i = 1; i <= pages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8.5).setTextColor.apply(doc, GREY);
+        doc.text("Kim Industries  ·  Material Order " + orderNo(o), M, H - 24);
+        doc.text("Page " + i + " of " + pages, W - M, H - 24, { align: "right" });
+      }
+      return doc.output("blob");
+    });
+  }
+
+  function downloadBlob(blob, name) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
   function doSend(kind) {
     var o = currentOrder();
-    var subject = "Material Order " + o.number + " - Job " + o.jobNumber + (o.jobName ? " (" + o.jobName + ")" : "");
+    if (!o.number) { toast("Waiting for an order number - connect to the internet"); scheduleSync(0); return; }
+    var subject = "Kim Industries Material Order " + o.number + " - Job " + o.jobNumber + (o.jobName ? " (" + o.jobName + ")" : "");
     var text = orderText(o);
+    var done = Promise.resolve(true);
     if (kind === "email") {
       location.href = "mailto:" + encodeURIComponent(emailFor(o.supplier)) + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(text);
     } else if (kind === "share") {
-      navigator.share({ title: subject, text: text }).catch(function () { /* cancelled */ });
+      done = navigator.share({ title: subject, text: text }).then(function () { return true; }, function () { return false; });
+    } else if (kind === "share-pdf" || kind === "pdf") {
+      toast("Creating PDF…");
+      done = buildPdf(o).then(function (blob) {
+        if (kind === "pdf") { downloadBlob(blob, pdfName(o)); return true; }
+        var file = new File([blob], pdfName(o), { type: "application/pdf" });
+        return navigator.share({ files: [file], title: subject, text: subject + (emailFor(o.supplier) ? "\nSupplier email: " + emailFor(o.supplier) : "") })
+          .then(function () { return true; }, function (e) { return !(e && e.name === "AbortError") && (downloadBlob(blob, pdfName(o)), true); });
+      }, function (e) {
+        console.error(e);
+        toast("Couldn't create the PDF");
+        return false;
+      });
     } else if (kind === "print") {
       document.getElementById("print-area").innerHTML = printHtml(o);
-      window.print();
+      var img = document.querySelector("#print-area img");
+      if (img && !img.complete) img.onload = function () { window.print(); };
+      else window.print();
     } else if (kind === "copy") {
       copyText(text);
     } else if (kind === "csv") {
-      var blob = new Blob([orderCsv(o)], { type: "text/csv" });
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "Material-Order_" + o.number.replace(/[^\w-]+/g, "_") + ".csv";
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      downloadBlob(new Blob([orderCsv(o)], { type: "text/csv" }), "Material-Order_" + o.number.replace(/[^\w-]+/g, "_") + ".csv");
     }
-    if (o.status !== "sent") {
-      o.status = "sent";
-      o.sentAt = new Date().toISOString();
-      putOrder(o);
-      setTimeout(render, 300);
-    }
+    done.then(function (ok) {
+      o = currentOrder();
+      if (ok && o.status !== "sent") {
+        o.status = "sent";
+        o.sentAt = new Date().toISOString();
+        putOrder(o);
+        setTimeout(render, 300);
+      }
+    });
   }
 
   function copyText(text) {
@@ -919,47 +1230,142 @@
 
   // ----- history
   VIEWS.history = function () {
-    var orders = getOrders();
-    var h = topbar("Order History", orders.length + " orders on this device", backBtn("home", "Home"));
-    h += '<main class="page">';
-    if (!orders.length) h += '<div class="empty">No orders yet.</div>';
-    else {
-      h += '<div class="tile-list">';
-      orders.forEach(function (o) { h += orderTile(o); });
-      h += "</div>";
+    var all = getOrders();
+    var me = Cloud.user ? Cloud.user.email : "";
+    var f = state.historyFilter || "";
+    var mine = state.historyMine && Cloud.enabled;
+    var q = f.trim().toUpperCase();
+    var orders = all.filter(function (o) {
+      if (mine && o.createdBy !== me) return false;
+      if (!q) return true;
+      return [o.jobNumber, o.jobName, o.number, o.supplier, o.createdByName].join(" ").toUpperCase().indexOf(q) >= 0;
+    });
+    var h = topbar("Order History", Cloud.enabled ? "All company orders" : "Orders on this device", backBtn("home", "Home"), syncPill());
+    h += '<main class="page"><div class="searchbar"><div class="search-wrap">' + ICON.search +
+      '<input class="search-input" id="history-q" type="search" autocomplete="off" placeholder="Job #, job name, order # or supplier" value="' + esc(f) + '" aria-label="Filter orders"></div>';
+    if (Cloud.enabled) {
+      h += '<div class="seg" style="margin-top:10px"><button data-action="history-mine" data-val="0" class="' + (mine ? "" : "on") + '">Everyone</button>' +
+        '<button data-action="history-mine" data-val="1" class="' + (mine ? "on" : "") + '">Just mine</button></div>';
     }
-    h += "</main>";
+    h += '</div><div id="history-list">' + historyList(orders) + "</div></main>";
     return h;
+  };
+  function historyList(orders) {
+    if (!orders.length) return '<div class="empty">No orders found.</div>';
+    return '<div class="tile-list">' + orders.slice(0, 200).map(orderTile).join("") + "</div>";
+  }
+  AFTER.history = function () {
+    var inp = document.getElementById("history-q");
+    inp.addEventListener("input", function () {
+      state.historyFilter = inp.value;
+      var y = window.scrollY;
+      render();
+      var el = document.getElementById("history-q");
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+      window.scrollTo(0, y);
+    });
+  };
+
+  // ----- sign in
+  VIEWS.login = function () {
+    return '<main class="page login"><div class="login-card">' +
+      '<img class="login-logo" src="assets/kim-logo.png" alt="Kim Industries">' +
+      '<h2>Material Orders</h2><p class="hint">Sign in with your Kim Industries account.</p>' +
+      '<form id="login-form"><label class="field"><span>Email</span><input class="input" id="login-email" type="email" autocomplete="username" required value="' + esc(store.get("lastEmail", "")) + '"></label>' +
+      '<label class="field"><span>Password</span><input class="input" id="login-pass" type="password" autocomplete="current-password" required></label>' +
+      '<div class="error-text" id="login-error" hidden></div>' +
+      '<button class="btn primary big block" type="submit" id="login-btn">Sign In</button></form>' +
+      '<p class="hint" style="margin-top:18px;font-size:14px">No account or forgot your password? Ask the office to set you up.</p></div></main>';
+  };
+  AFTER.login = function () {
+    var email = document.getElementById("login-email"), pass = document.getElementById("login-pass");
+    (email.value ? pass : email).focus();
+    document.getElementById("login-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var err = document.getElementById("login-error"), btn = document.getElementById("login-btn");
+      err.hidden = true;
+      btn.disabled = true;
+      btn.textContent = "Signing in…";
+      Cloud.signIn(email.value.trim(), pass.value).then(function (u) {
+        store.set("lastEmail", u.email);
+        if (store.get("owner", "") !== u.email) {
+          // Different person on this phone: don't show the previous user's unsynced cache.
+          saveOrders(getOrders().filter(function (o) { return o.dirty; }));
+          store.set("owner", u.email);
+        }
+        go("home");
+        syncNow();
+      }, function (ex) {
+        btn.disabled = false;
+        btn.textContent = "Sign In";
+        err.textContent = !navigator.onLine ? "No internet connection. Connect and try again."
+          : /invalid/i.test(ex && ex.message) ? "Email or password is incorrect." : (ex && ex.message) || "Could not sign in.";
+        err.hidden = false;
+      });
+    });
   };
 
   // ----- settings
   VIEWS.settings = function () {
     var s = settings();
+    var emails = supplierEmails();
     var h = topbar("Settings", "", backBtn("home", "Home"));
-    h += '<main class="page"><form id="settings-form"><div class="card">' +
-      '<label class="field"><span>Your name</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name) + '"></label>' +
+    h += '<main class="page"><form id="settings-form">';
+    if (Cloud.enabled && Cloud.user) {
+      h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:10px">' + esc(Cloud.user.email) + "</div>" +
+        '<button type="button" class="btn" data-action="sign-out">Sign out</button></div>';
+    }
+    h += '<div class="card"><label class="field"><span>Your name (shown on orders)</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name || myName()) + '"></label>' +
       '<label class="field" style="margin:0"><span>Your phone</span><input class="input" name="phone" type="tel" autocomplete="tel" value="' + esc(s.phone) + '"></label></div>' +
-      '<h3>Supplier order emails</h3><div class="card"><p class="hint" style="margin-top:0">Optional. Used to pre-fill the "To" line when emailing an order.</p>';
+      '<h3>Supplier order emails</h3><div class="card"><p class="hint" style="margin-top:0">Pre-fills the "To" line when emailing an order.' +
+      (Cloud.enabled ? " Shared with everyone in the company." : "") + "</p>";
     SUPPLIERS.forEach(function (sup) {
-      h += '<label class="field"><span>' + esc(sup) + '</span><input class="input" type="email" data-sup="' + esc(sup) + '" value="' + esc((s.supplierEmails || {})[sup] || "") + '" placeholder="orders@example.com"></label>';
+      h += '<label class="field"><span>' + esc(sup) + '</span><input class="input" type="email" data-sup="' + esc(sup) + '" value="' + esc(emails[sup] || "") + '" placeholder="orders@supplier.com"></label>';
     });
-    h += "</div></form><p class=\"hint\">Orders and settings are saved on this device only.</p></main>";
+    h += "</div></form><p class=\"hint\">" + (Cloud.enabled ? "Orders are shared through the Kim Industries database and saved on this phone for offline use."
+      : "Orders are saved on this device only.") + "</p></main>";
     return h;
   };
   AFTER.settings = function () {
-    document.getElementById("settings-form").addEventListener("input", function (e) {
+    var form = document.getElementById("settings-form");
+    form.addEventListener("input", function (e) {
       var s = settings();
-      s.supplierEmails = s.supplierEmails || {};
-      if (e.target.name) s[e.target.name] = e.target.value;
+      if (e.target.name) { s[e.target.name] = e.target.value; store.set("settings", s); }
+    });
+    form.addEventListener("change", function (e) {
       var sup = e.target.getAttribute("data-sup");
-      if (sup) s.supplierEmails[sup] = e.target.value.trim();
-      store.set("settings", s);
+      if (!sup) return;
+      var val = e.target.value.trim();
+      if (Cloud.enabled) {
+        var m = store.get("supplierEmails", {});
+        m[sup] = val;
+        store.set("supplierEmails", m);
+        Cloud.setSupplierEmail(sup, val).then(function () { toast("Saved for everyone"); }, function () { toast("Couldn't save - check your connection"); });
+      } else {
+        var s = settings();
+        s.supplierEmails = s.supplierEmails || {};
+        s.supplierEmails[sup] = val;
+        store.set("settings", s);
+        toast("Saved");
+      }
     });
   };
 
   // ---------------------------------------------------------------- actions
   var ACTIONS = {
     "home": function () { go("home"); },
+    "sync-now": function () { syncNow().then(function () { if (sync.state === "synced") toast("Up to date"); }); },
+    "history-mine": function (el) { state.historyMine = el.getAttribute("data-val") === "1"; render(); },
+    "sign-out": function () {
+      var n = pendingCount();
+      if (n && !confirm(n + " change(s) haven't reached the office yet and will be lost. Sign out anyway?")) return;
+      Cloud.signOut().then(function () {
+        saveOrders([]);
+        store.set("pendingDeletes", []);
+        go("login");
+      });
+    },
     "settings": function () { go("settings"); },
     "history": function () { go("history"); },
     "lookup": function () { go("lookup", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
@@ -1096,15 +1502,18 @@
       });
       var copy = JSON.parse(JSON.stringify(o));
       copy.id = uid();
-      copy.number = newOrderNumber(copy.jobNumber);
+      copy.number = Cloud.enabled ? null : newOrderNumber(copy.jobNumber);
+      copy.createdBy = Cloud.user ? Cloud.user.email : "";
+      copy.createdByName = myName();
       copy.status = "draft";
       copy.lines = lines;
       copy.needBy = "";
       copy.createdAt = new Date().toISOString();
       delete copy.sentAt;
       putOrder(copy);
+      scheduleSync(0);
       state.orderId = copy.id;
-      toast("Copied as new draft " + copy.number);
+      toast("Copied as a new draft");
       go("review");
     }
   };
@@ -1121,7 +1530,29 @@
 
   // ---------------------------------------------------------------- start
   try { history.replaceState({ v: "home" }, ""); } catch (e) { /* ignore */ }
-  render();
+  if (!Cloud.enabled) {
+    render();
+  } else {
+    app.innerHTML = '<div class="loading"><img src="assets/kim-logo.png" alt="Kim Industries" style="width:140px"><div>Loading…</div></div>';
+    Cloud.init().then(function (u) {
+      if (u) {
+        store.set("owner", u.email);
+        render();
+        syncNow();
+      } else if (!navigator.onLine && store.get("owner", "")) {
+        // No signal, but this phone was signed in before: keep working, sync when back online.
+        render();
+        setSyncState("offline");
+      } else {
+        state.view = "login";
+        render();
+      }
+    });
+    window.addEventListener("online", function () {
+      if (Cloud.user || state.view === "login") return;
+      Cloud.init().then(function (u) { if (u) syncNow(); else go("login"); });
+    });
+  }
   setTimeout(ensureIndex, 50);
 
   if ("serviceWorker" in navigator && location.protocol === "https:") {

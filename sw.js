@@ -1,6 +1,8 @@
 /* Offline support: serve from network when available, fall back to the cached copy. */
-var CACHE = "material-orders-v1";
-var FILES = ["./", "index.html", "css/app.css", "js/search.js", "js/app.js", "data/catalog.js", "manifest.webmanifest", "icon.svg"];
+var CACHE = "material-orders-v2";
+var FILES = ["./", "index.html", "css/app.css", "js/search.js", "js/app.js", "data/catalog.js", "manifest.webmanifest",
+  "js/config.js", "js/cloud.js", "js/vendor/supabase.js", "js/vendor/jspdf.umd.min.js", "js/vendor/jspdf.plugin.autotable.min.js",
+  "assets/kim-logo.png", "assets/icon-192.png", "assets/icon-512.png"];
 
 self.addEventListener("install", function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));
