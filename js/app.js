@@ -194,6 +194,20 @@
       .filter(function (r) { return +r.qty > 0; })
       .sort(function (a, b) { return b.qty - a.qty; });
   }
+  function refreshAccess() {
+    if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    var before = JSON.stringify(access());
+    return Cloud.getMyAccess().then(function (a) {
+      store.set("access", a);
+      if (JSON.stringify(a) !== before) render();
+    }, function () { /* keep cached */ });
+  }
+  function setupBanner() {
+    return Cloud.enabled && access().setupMissing
+      ? '<div class="notice"><b>Database setup not finished.</b> Shop stock and admin features need <code>supabase/shop.sql</code> to be run once in Supabase (SQL Editor → New query → paste → Run). Then reopen this screen.</div>'
+      : "";
+  }
+
   function setStock(rows) { store.set("stock", rows); stockIdx = null; }
   function refreshStock() {
     if (!Cloud.enabled || !Cloud.user) return Promise.resolve();
@@ -469,6 +483,7 @@
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
+    h += setupBanner();
     var pulls = canEditShop() ? pendingPulls() : [];
     if (pulls.length) h += '<button class="tile pull-alert" data-action="shop"><div class="t-main"><div class="t-title">' + ICON_SHOP + pulls.length + " order" + (pulls.length === 1 ? "" : "s") + ' waiting on shop material</div><div class="t-sub">Tap to pull and update stock</div></div><span class="chev">›</span></button>';
     if (drafts.length) {
@@ -1482,6 +1497,7 @@
     var h = topbar("Shop Stock", "Material on hand in our shops", backBtn("home", "Home"), syncPill());
     h += '<main class="page">';
     if (!Cloud.enabled) return h + '<div class="empty">Shop stock needs the shared database.</div></main>';
+    h += setupBanner();
     if (canEditShop()) h += '<button class="btn primary big block" data-action="shop-add" style="margin-bottom:14px">' + ICON.plus + "Add Material to Shop</button>";
     else h += '<div class="notice">You can see shop stock. To add or remove material, ask an admin for permission.</div>';
 
@@ -1670,7 +1686,7 @@
   VIEWS.users = function () {
     var h = topbar("Users & Permissions", "Admin", backBtn("settings", "Settings"));
     h += '<main class="page">';
-    if (!isAdmin()) return h + '<div class="empty">Only an admin can manage users.</div></main>';
+    if (!isAdmin()) return h + setupBanner() + '<div class="empty">Only an admin can manage users.</div></main>';
     h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a person</h2><form id="user-form" autocomplete="off">' +
       '<label class="field"><span>Email <span class="req">*</span></span><input class="input" name="email" type="email" required placeholder="name@kimindustries.com"></label>' +
       '<label class="field"><span>Name</span><input class="input" name="name" placeholder="First and last name"></label>' +
@@ -1826,7 +1842,7 @@
     var s = settings();
     var emails = supplierEmails();
     var h = topbar("Settings", "", backBtn("home", "Home"));
-    h += '<main class="page"><form id="settings-form">';
+    h += '<main class="page">' + setupBanner() + '<form id="settings-form">';
     if (Cloud.enabled && Cloud.user) {
       h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:4px">' + esc(Cloud.user.email) + "</div>" +
         '<div class="hint" style="margin:0 0 10px">' + (isAdmin() ? "Admin" : canEditShop() ? "Can change shop stock" : "Crew member") + "</div>" +
@@ -1837,8 +1853,10 @@
       '<label class="field" style="margin:0"><span>Your phone</span><input class="input" name="phone" type="tel" autocomplete="tel" value="' + esc(s.phone) + '"></label></div>' +
       '<h3>Supplier order emails</h3><div class="card"><p class="hint" style="margin-top:0">Pre-fills the "To" line when emailing an order.' +
       (Cloud.enabled ? " Shared with everyone in the company." : "") + "</p>";
+    var canEditEmails = !Cloud.enabled || isAdmin();
+    if (!canEditEmails) h += '<div class="hint" style="margin-top:-6px">Only an admin can change these.</div>';
     SUPPLIERS.forEach(function (sup) {
-      h += '<label class="field"><span>' + esc(sup) + '</span><input class="input" type="email" data-sup="' + esc(sup) + '" value="' + esc(emails[sup] || "") + '" placeholder="orders@supplier.com"></label>';
+      h += '<label class="field"><span>' + esc(sup) + '</span><input class="input" type="email" data-sup="' + esc(sup) + '" value="' + esc(emails[sup] || "") + '" placeholder="' + (canEditEmails ? "orders@supplier.com" : "Not set") + '"' + (canEditEmails ? "" : " readonly") + "></label>";
     });
     h += "</div></form><p class=\"hint\">" + (Cloud.enabled ? "Orders are shared through the Kim Industries database and saved on this phone for offline use."
       : "Orders are saved on this device only.") + "</p></main>";
@@ -1852,13 +1870,15 @@
     });
     form.addEventListener("change", function (e) {
       var sup = e.target.getAttribute("data-sup");
-      if (!sup) return;
+      if (!sup || e.target.readOnly) return;
       var val = e.target.value.trim();
       if (Cloud.enabled) {
         var m = store.get("supplierEmails", {});
         m[sup] = val;
         store.set("supplierEmails", m);
-        Cloud.setSupplierEmail(sup, val).then(function () { toast("Saved for everyone"); }, function () { toast("Couldn't save - check your connection"); });
+        Cloud.setSupplierEmail(sup, val).then(function () { toast("Saved for everyone"); }, function (ex) {
+          toast(/row-level|policy|permission/i.test(ex && ex.message || "") ? "Only an admin can change supplier emails" : "Couldn't save - check your connection");
+        });
       } else {
         var s = settings();
         s.supplierEmails = s.supplierEmails || {};
@@ -1872,7 +1892,7 @@
   // ---------------------------------------------------------------- actions
   var ACTIONS = {
     "home": function () { go("home"); },
-    "shop": function () { go("shop"); refreshStock().then(function () { if (state.view === "shop") renderStockList(); }); },
+    "shop": function () { go("shop"); refreshAccess(); refreshStock().then(function () { if (state.view === "shop") renderStockList(); }); },
     "shop-add": function () {
       if (!canEditShop()) { toast("You don't have permission to change shop stock"); return; }
       go("shop-add", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" });
@@ -1884,7 +1904,7 @@
       if (r) openStockSheet({ key: r.item_key, name: r.item_name, unit: r.unit, category: r.category, model: r.model }, el.getAttribute("data-div"));
     },
     "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
-    "users": function () { go("users"); },
+    "users": function () { go("users"); refreshAccess(); },
     "user-remove": function (el) {
       var email = el.getAttribute("data-email");
       if (!confirm("Remove " + email + " from the list? Their shop permission goes away (their login still works - use 'Turn off access' to block them).")) return;
@@ -1910,7 +1930,7 @@
         go("login");
       });
     },
-    "settings": function () { go("settings"); },
+    "settings": function () { go("settings"); refreshAccess(); },
     "history": function () { go("history"); },
     "lookup": function () { go("lookup", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
     "new-order": function () { state.draft = {}; go("supplier"); },

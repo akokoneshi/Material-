@@ -149,3 +149,16 @@ drop policy if exists "log read"   on public.shop_log;
 create policy "stock read" on public.shop_stock for select to authenticated using (not is_blocked());
 create policy "log read"   on public.shop_log   for select to authenticated using (not is_blocked());
 -- No insert/update/delete policies: changes only through adjust_stock().
+
+-- ---------------------------------------------------------------- supplier emails: admins only
+drop policy if exists "contacts read"   on public.supplier_contacts;
+drop policy if exists "contacts write"  on public.supplier_contacts;
+drop policy if exists "contacts update" on public.supplier_contacts;
+drop policy if exists "contacts delete" on public.supplier_contacts;
+create policy "contacts read"   on public.supplier_contacts for select to authenticated using (not is_blocked());
+create policy "contacts write"  on public.supplier_contacts for insert to authenticated with check (is_admin());
+create policy "contacts update" on public.supplier_contacts for update to authenticated using (is_admin()) with check (is_admin());
+create policy "contacts delete" on public.supplier_contacts for delete to authenticated using (is_admin());
+
+-- Check: this should list amandak@kimindustries.com as admin.
+select email, role, can_edit_shop from public.app_users order by role, email;

@@ -118,7 +118,13 @@
   Cloud.getMyAccess = function () {
     return client.from("app_users").select("email, name, role, can_edit_shop, blocked")
       .eq("email", (user && user.email || "").toLowerCase()).maybeSingle().then(must)
-      .then(function (r) { return r || { role: "user", can_edit_shop: false, blocked: false }; });
+      .then(function (r) { return r || { role: "user", can_edit_shop: false, blocked: false }; }, function (e) {
+        // Table missing = supabase/shop.sql hasn't been run yet.
+        if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) {
+          return { role: "user", can_edit_shop: false, blocked: false, setupMissing: true };
+        }
+        throw e;
+      });
   };
 
   Cloud.listStock = function () {
