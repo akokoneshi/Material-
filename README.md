@@ -137,8 +137,8 @@ one file per job. Run each one in the SQL Editor. If you already loaded the olde
 
 ## Invoice Approval (AI agent)
 
-Upload vendor invoices (PDF or photos) under **Invoice Approval**. An AI agent (Claude, running in the
-`invoice-agent` Supabase Edge Function so the API key never reaches phones):
+Upload vendor invoices (PDF or photos) under **Invoice Approval**. An AI agent (Google Gemini or Anthropic
+Claude, whichever key is set, running in the `invoice-agent` Supabase Edge Function so the API key never reaches phones):
 1. **reads** the invoice: vendor, invoice #, PO / references, and every line (item code, description, qty, unit, unit price).
 2. **finds the order**: first by our order # on the invoice (e.g. PO "24-118-003"), otherwise by the products
    (the sent order from that supplier whose item codes best match, boosted if the job # is printed).
@@ -156,11 +156,16 @@ Who can see invoices: admins, and people given **Can review invoices** in Users 
 
 **One-time setup**
 1. **SQL Editor:** run [`supabase/invoices.sql`](supabase/invoices.sql). It creates the table, permission, and a private `invoices` storage bucket.
-2. Get an Anthropic API key (console.anthropic.com → API Keys).
-3. **Edge Functions → Secrets:** add `ANTHROPIC_API_KEY` with that key.
+2. Get an AI key. Either one works:
+   - **Gemini (free tier):** aistudio.google.com → Get API key. Add it as the secret `GEMINI_API_KEY`.
+   - **Claude:** console.anthropic.com → API Keys. Add it as `ANTHROPIC_API_KEY`.
+3. **Edge Functions → Secrets:** add the key. If both are set, Gemini is used.
 4. **Edge Functions → Deploy a new function → Via Editor:** name it **`invoice-agent`**, paste
    [`supabase/functions/invoice-agent/index.ts`](supabase/functions/invoice-agent/index.ts), click **Deploy**, then in the
    function's **Settings** turn **off** "Verify JWT". (If Supabase gives it a different name, put that name in
    `invoiceFunction` in `js/config.js`.)
 
-Model: `claude-opus-5` with adaptive thinking. Set the secret `INVOICE_MODEL` / `INVOICE_EFFORT` to change them.
+Models: Gemini uses `gemini-flash-latest` (Google's current Flash model); Claude uses `claude-opus-5` with adaptive
+thinking. Set the secret `INVOICE_MODEL` to use a different model. Note that on Gemini's free tier, Google may use
+the content you send to improve its products, and requests are rate-limited. A "busy / free-tier limit" message
+means wait a minute and tap **Re-run AI check**.

@@ -4,12 +4,18 @@
 //
 // Deploy: Dashboard > Edge Functions > Deploy a new function > Via Editor, name it "invoice-agent",
 // paste this file, Deploy. Then in the function's Settings turn OFF "Verify JWT" (this code checks the
-// caller itself). Add the secret ANTHROPIC_API_KEY under Edge Functions > Secrets.
+// caller itself).
+// AI provider - add ONE of these under Edge Functions > Secrets:
+//   GEMINI_API_KEY     Google Gemini (free tier available at aistudio.google.com). Used if set.
+//   ANTHROPIC_API_KEY  Anthropic Claude.
 import Anthropic from "npm:@anthropic-ai/sdk@^0.128.0";
+import { GoogleGenAI, FinishReason } from "npm:@google/genai@^2.24.0";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 
-const MODEL = Deno.env.get("INVOICE_MODEL") || "claude-opus-5";
+const USE_GEMINI = !!Deno.env.get("GEMINI_API_KEY");
+// "gemini-flash-latest" always points at Google's current Flash model (free tier).
+const MODEL = Deno.env.get("INVOICE_MODEL") || (USE_GEMINI ? "gemini-flash-latest" : "claude-opus-5");
 const EFFORT = (Deno.env.get("INVOICE_EFFORT") || "high") as "low" | "medium" | "high" | "xhigh" | "max";
 
 const cors = {
@@ -216,9 +222,49 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
 
 // ---------------------------------------------------------------- Claude calls
 
-const anthropic = new Anthropic(); // ANTHROPIC_API_KEY from the function's secrets
+// What we send the model: an optional file plus text instructions.
+type AskInput = { file?: { mediaType: string; base64: string }; text: string };
 
-async function askJSON<T>(content: Anthropic.Beta.Messages.BetaContentBlockParam[], schema: Record<string, unknown>): Promise<T> {
+export async function askJSON<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
+  return USE_GEMINI ? await askGemini<T>(input, schema) : await askClaude<T>(input, schema);
+}
+
+async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
+  const ai = new GoogleGenAI({ apiKey: Deno.env.get("GEMINI_API_KEY")! });
+  const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
+  if (input.file) parts.push({ inlineData: { mimeType: input.file.mediaType, data: input.file.base64 } });
+  parts.push({ text: input.text });
+  const call = (withSchema: boolean) => ai.models.generateContent({
+    model: MODEL,
+    contents: [{ role: "user", parts: withSchema ? parts : parts.slice(0, -1).concat([{ text: input.text + "\n\nRespond with only JSON matching this JSON Schema:\n" + JSON.stringify(schema) }]) }],
+    config: withSchema
+      ? { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 32000 }
+      : { responseMimeType: "application/json", maxOutputTokens: 32000 },
+  });
+  let res;
+  try {
+    res = await call(true);
+  } catch (e) {
+    // If this Gemini model rejects part of the schema, fall back to describing it in the prompt.
+    if ((e as { status?: number })?.status !== 400) throw e;
+    res = await call(false);
+  }
+  const reason = res.candidates?.[0]?.finishReason;
+  if (reason === FinishReason.SAFETY || reason === FinishReason.RECITATION) throw new Error("The AI declined to read this document.");
+  if (reason === FinishReason.MAX_TOKENS) throw new Error("The invoice was too long to read in one pass.");
+  if (!res.text) throw new Error("The AI returned no result.");
+  return JSON.parse(res.text) as T;
+}
+
+async function askClaude<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
+  const anthropic = new Anthropic(); // ANTHROPIC_API_KEY from the function's secrets
+  const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [];
+  if (input.file) {
+    content.push(input.file.mediaType === "application/pdf"
+      ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: input.file.base64 } }
+      : { type: "image", source: { type: "base64", media_type: input.file.mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: input.file.base64 } });
+  }
+  content.push({ type: "text", text: input.text });
   const stream = anthropic.beta.messages.stream({
     model: MODEL,
     max_tokens: 32000,
@@ -237,11 +283,7 @@ async function askJSON<T>(content: Anthropic.Beta.Messages.BetaContentBlockParam
 }
 
 async function extractInvoice(bytes: Uint8Array, mediaType: string): Promise<Extracted> {
-  const data = encodeBase64(bytes);
-  const doc: Anthropic.Beta.Messages.BetaContentBlockParam = mediaType === "application/pdf"
-    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data } }
-    : { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data } };
-  return await askJSON<Extracted>([doc, { type: "text", text: EXTRACT_PROMPT }], EXTRACT_SCHEMA);
+  return await askJSON<Extracted>({ file: { mediaType, base64: encodeBase64(bytes) }, text: EXTRACT_PROMPT }, EXTRACT_SCHEMA);
 }
 
 // Pair invoice lines with order lines by description when item codes didn't match.
@@ -257,7 +299,7 @@ ${invLines.map((l) => `${l.line}. [${l.item_code || "-"}] ${l.description} (${l.
 
 ORDER LINES:
 ${ordLines.map((o, i) => `${i + 1}. [${o.model || "-"}] ${o.name} (${o.unit})`).join("\n")}`;
-  const res = await askJSON<{ pairs: { invoice_line: number; order_line: number }[] }>([{ type: "text", text: prompt }], {
+  const res = await askJSON<{ pairs: { invoice_line: number; order_line: number }[] }>({ text: prompt }, {
     type: "object", additionalProperties: false, required: ["pairs"],
     properties: { pairs: { type: "array", items: { type: "object", additionalProperties: false, required: ["invoice_line", "order_line"],
       properties: { invoice_line: { type: "integer" }, order_line: { type: "integer" } } } } },
@@ -326,7 +368,9 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
       match_method: method, comparison: { rows, candidates }, mismatch_count: mismatches }).eq("id", id);
   } catch (e) {
     console.error(e);
-    const msg = e instanceof Anthropic.APIError ? `AI service error (${e.status}): ${e.message}` : String((e as Error)?.message || e);
+    const status = (e as { status?: number })?.status;
+    const msg = status === 429 ? "The AI service is busy or the free-tier limit was reached. Try Re-run AI check in a minute."
+      : status ? `AI service error (${status}): ${(e as Error).message}` : String((e as Error)?.message || e);
     await db.from("invoices").update({ status: "error", error: msg, updated_at: new Date().toISOString() }).eq("id", id);
   }
 }
@@ -340,7 +384,7 @@ Deno.serve(async (req) => {
     let key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     if (!key) { try { key = (Object.values(JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}"))[0] as string) || ""; } catch { /* ignore */ } }
     if (!key) return reply({ error: "Function has no service key available" }, 500);
-    if (!Deno.env.get("ANTHROPIC_API_KEY")) return reply({ error: "ANTHROPIC_API_KEY secret is not set for this function" }, 500);
+    if (!Deno.env.get("GEMINI_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) return reply({ error: "Add a GEMINI_API_KEY (or ANTHROPIC_API_KEY) secret for this function" }, 500);
     const db = createClient(url, key);
 
     const token = (req.headers.get("Authorization") || "").replace(/^Bearer /i, "");
