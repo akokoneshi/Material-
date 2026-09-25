@@ -408,3 +408,5 @@ details summary { cursor: pointer; padding: 6px 0; }
 .il-name { font-weight: 700; margin: 4px 0; overflow-wrap: anywhere; }
 .il-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-weight: 700; }
 .il-grid small { display: block; color: var(--muted); font-weight: 600; font-size: 12px; }
+.tile.manual-add { margin: 6px 0 24px; border-style: dashed; border-color: var(--kim-blue); background: var(--kim-blue-tint); }
+.tile.manual-add > svg { width: 26px; height: 26px; color: var(--kim-blue); flex: none; }

@@ -746,7 +746,7 @@
       meta.innerHTML = "";
       box.innerHTML = '<div class="examples"><div class="hint">Type a size and material, e.g. pipe size × thickness. Tap an example:</div><div class="chips">' +
         EXAMPLES.map(function (e) { return '<button class="chip" data-action="example" data-q="' + esc(e) + '">' + esc(e) + "</button>"; }).join("") +
-        '</div><div class="hint">Or switch to <b>Browse by Category</b> to pick from lists.</div></div>';
+        '</div><div class="hint">Or switch to <b>Browse by Category</b> to pick from lists.</div></div>' + manualAddHtml("");
       return;
     }
     ensureIndex();
@@ -763,10 +763,18 @@
     if (res.partial) h += '<div class="notice">No exact match for every word. Showing the closest items.</div>';
     if (!res.results.length) {
       h += '<div class="empty"><p><b>Nothing found.</b></p><p>Check the size (pipe size first, then thickness), try fewer words, or browse by category.</p>' +
-        (state.view === "build" ? '<button class="btn" data-action="custom-item">Add an item that isn\'t listed</button>' : "") + "</div>";
+        "</div>";
     }
-    h += resultsHtml(res.results);
+    h += resultsHtml(res.results) + manualAddHtml(q);
     box.innerHTML = h;
+  }
+
+  // Orders only: add something that isn't in the price list.
+  function manualAddHtml(q) {
+    if (state.view !== "build") return "";
+    return '<button class="tile manual-add" data-action="custom-item" data-q="' + esc(q || "") + '">' + ICON.plus +
+      '<div class="t-main"><div class="t-title">Can\'t find it? Add it manually</div><div class="t-sub">' +
+      (q ? "Add \u201c" + esc(q) + "\u201d as an item not in the price list" : "Type the item name yourself; price can be left blank") + "</div></div></button>";
   }
 
   function resultsHtml(list) {
@@ -860,7 +868,7 @@
           '</div><div class="t-sub">' + k.count.toLocaleString() + " items" + (Object.keys(k.children).length ? " · " + Object.keys(k.children).length + " groups" : "") +
           "</div></div><span class=\"chev\">›</span></button>";
       });
-      h += "</div>";
+      h += "</div>" + manualAddHtml("");
       return h;
     }
     // item list for this category, with size filters
@@ -914,7 +922,7 @@
       items.sort(S.compareSize);
     }
     box.innerHTML = '<div class="search-meta" style="margin-bottom:8px"><b>' + items.length.toLocaleString() + "</b> items</div>" +
-      (items.length ? resultsHtml(items) : '<div class="empty">No items match these filters.</div>');
+      (items.length ? resultsHtml(items) : '<div class="empty">No items match these filters.</div>') + manualAddHtml("");
   }
 
   var searchTimer;
@@ -1143,15 +1151,19 @@
     toast("Removed from order");
   }
 
-  function openCustomSheet() {
-    var h = "<h2>Add an item that isn't listed</h2><form id=\"custom-form\">" +
-      '<label class="field"><span>Description <span class="req">*</span></span><input class="input" id="c-name" required placeholder=\'e.g. 3" x 1" fiberglass pipe, special order\'></label>' +
+  function openCustomSheet(prefill) {
+    var h = "<h2>Add an item that isn't in the price list</h2>" +
+      '<p class="hint" style="margin-top:-6px">Type what you need. Price can be left blank; the supplier will price it.</p><form id="custom-form">' +
+      '<label class="field"><span>Item name / description <span class="req">*</span></span><input class="input" id="c-name" required value="' + esc(prefill || "") + '" placeholder=\'e.g. 3" x 1" fiberglass pipe, special order\'></label>' +
+      '<label class="field"><span>Part # <small style="font-weight:500;color:var(--muted)">(optional)</small></span><input class="input" id="c-part" autocomplete="off" placeholder="Supplier part / item number, if you know it"></label>' +
       '<div class="filters"><label class="field"><span>Quantity <span class="req">*</span></span><input class="input" id="c-qty" type="number" inputmode="decimal" min="0" step="any"></label>' +
       '<label class="field"><span>Unit</span><select class="input" id="c-unit">' + ["EA", "LF", "FT", "SF", "RL", "BX", "PK", "GAL", "SET"].map(function (u) { return "<option>" + u + "</option>"; }).join("") + "</select></label>" +
-      '<label class="field full"><span>Price per unit (if known)</span><input class="input" id="c-price" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank if unknown"></label></div>' +
+      '<label class="field full"><span>Price per unit <small style="font-weight:500;color:var(--muted)">(optional)</small></span><input class="input" id="c-price" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank if unknown"></label></div>' +
       '<div class="btn-row"><button type="button" class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" type="submit">Add to Order</button></div></form>';
     openSheet(h, function (sheet) {
-      sheet.querySelector("#c-name").focus();
+      var nm = sheet.querySelector("#c-name");
+      nm.focus();
+      nm.setSelectionRange(nm.value.length, nm.value.length);
       sheet.querySelector("#custom-form").addEventListener("submit", function (e) {
         e.preventDefault();
         var name = sheet.querySelector("#c-name").value.trim();
@@ -1161,7 +1173,7 @@
         var o = currentOrder();
         o.lines.push({
           key: "custom:" + uid(), custom: true, id: "", name: name, unit: sheet.querySelector("#c-unit").value,
-          price: parseFloat(sheet.querySelector("#c-price").value) || 0, model: "", category: "Not in price list", qty: +qty.toFixed(3)
+          price: parseFloat(sheet.querySelector("#c-price").value) || 0, model: sheet.querySelector("#c-part").value.trim(), category: "Not in price list", qty: +qty.toFixed(3)
         });
         putOrder(o);
         closeSheet();
@@ -1256,7 +1268,7 @@
     return '<div class="line' + (shop ? " shop-line" : "") + '"><div><div class="l-name">' + esc(l.name) + "</div>" +
       '<div class="l-sub">' + (shop
         ? '<span class="div-tag">Div ' + esc(l.division) + "</span> " + (l.pulled ? "Pulled ✓" : "To be pulled from shop")
-        : (l.custom ? "Not in price list" : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
+        : (l.custom ? "Not in price list" + (l.model ? " · #" + esc(l.model) : "") : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
           (l.special ? '<span class="job-price">Job price</span> ' : "") +
           (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit)) + "</div></div>" +
       '<div class="l-ext">' + (shop ? "Shop" : l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
@@ -2963,7 +2975,7 @@
       render();
     },
     "item": function (el) { openItemSheet(el.getAttribute("data-key")); },
-    "custom-item": function () { openCustomSheet(); },
+    "custom-item": function (el) { openCustomSheet(el.getAttribute("data-q") || ""); },
     "close-sheet": closeSheet,
     "close-sheet-bg": function (el, e) { if (e.target === el) closeSheet(); },
     "review": function () { go("review"); },
