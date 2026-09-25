@@ -7,6 +7,6 @@
  * Leave both empty to run in single-device mode (orders saved on the phone only).
  */
 window.APP_CONFIG = {
-  supabaseUrl: "",
+  supabaseUrl: "https://drhnhpuzrfmlvcmkzmmg.supabase.co",
   supabaseAnonKey: ""
 };
