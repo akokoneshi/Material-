@@ -103,8 +103,8 @@ job_reference / other_references.
 - lines: one entry per billed product line, in order, numbered from 1. item_code is the vendor's product / \
 part / item number (not the line number). quantity is the quantity billed/shipped on this invoice (not \
 backordered). unit_price is the price per unit of measure; unit is that unit of measure (LF, FT, EA, RL, BX...). \
-extended is the line total. Do not include freight, fuel surcharge, tax or other charges as lines; put freight and \
-tax in their own fields.
+extended is the line total. Do not list charges as product lines: sales tax goes in tax; freight, delivery, \
+shipping, handling, FSC / fuel surcharge and similar fees go in freight (add them together).
 - Numbers are plain numbers (no $ or commas). Use null for anything not printed. Do not guess.`;
 
 // ---------------------------------------------------------------- matching the order
@@ -180,6 +180,22 @@ export type CompareRow = {
   matched_by: "code" | "agent" | null;
 };
 
+// Tax, freight and FSC / fuel surcharge are never compared with the order, even if the AI listed them as lines.
+const CHARGE_RE = /\b(sales\s*tax|tax(es)?|freight|fsc|fuel\s*(sur\s*)?charge|fuel|surcharge|delivery(\s*charge|\s*fee)?|shipping|handling|hazmat)\b/i;
+export function isChargeLine(l: InvoiceLine): boolean {
+  const text = `${l.item_code || ""} ${l.description || ""}`.trim();
+  // A product line (sizes, "X", "#12"...) that merely mentions a word like "delivery" is still a product.
+  if (!CHARGE_RE.test(text)) return false;
+  return !/\d\s*(x|")\s*\d|#\d|\bpc\b|pipe|jacket|tape|board|insul/i.test(l.description || "");
+}
+export function productLines(ex: Extracted): InvoiceLine[] { return (ex.lines || []).filter((l) => !isChargeLine(l)); }
+export function ignoredCharges(ex: Extracted): { description: string; amount: number | null }[] {
+  const out = (ex.lines || []).filter(isChargeLine).map((l) => ({ description: l.description || l.item_code || "Charge", amount: l.extended ?? l.unit_price }));
+  if (ex.freight) out.push({ description: "Freight / FSC", amount: ex.freight });
+  if (ex.tax) out.push({ description: "Tax", amount: ex.tax });
+  return out;
+}
+
 export function priceMismatch(inv: number, ord: number): boolean {
   return Math.abs(inv - ord) > Math.max(0.01, Math.abs(ord) * 0.002);
 }
@@ -188,8 +204,9 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
   const ordLines = (order.data?.lines || []).filter((l) => l.source !== "shop");
   const used = new Set<number>();
   const pairOf = new Map<number, number>();
+  const lines = productLines(ex);
   // Exact item-code matches first.
-  ex.lines.forEach((l) => {
+  lines.forEach((l) => {
     const k = codeKey(l.item_code);
     if (k.length < 4) return;
     const idx = ordLines.findIndex((o, i) => !used.has(i) && codeKey(o.model) === k);
@@ -200,7 +217,7 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
     const idx = p.order_line - 1;
     if (!pairOf.has(p.invoice_line) && idx >= 0 && idx < ordLines.length && !used.has(idx)) { used.add(idx); pairOf.set(p.invoice_line, idx); }
   });
-  const rows: CompareRow[] = ex.lines.map((l) => {
+  const rows: CompareRow[] = lines.map((l) => {
     const idx = pairOf.get(l.line);
     const o = idx == null ? null : ordLines[idx];
     const base = {
@@ -343,9 +360,10 @@ async function loadOrders(db: SupabaseClient): Promise<Order[]> {
 
 async function compareWithOrder(db: SupabaseClient, ex: Extracted, order: Order) {
   const ordLines = (order.data?.lines || []).filter((l) => l.source !== "shop");
-  const codeMatched = new Set(ex.lines.filter((l) => ordLines.some((o) => codeKey(o.model).length >= 4 && codeKey(o.model) === codeKey(l.item_code))).map((l) => l.line));
-  const leftoverInv = ex.lines.filter((l) => !codeMatched.has(l.line));
-  const usedOrd = new Set(ordLines.map((o, i) => (ex.lines.some((l) => codeKey(l.item_code) === codeKey(o.model) && codeKey(o.model).length >= 4) ? i : -1)));
+  const lines = productLines(ex);
+  const codeMatched = new Set(lines.filter((l) => ordLines.some((o) => codeKey(o.model).length >= 4 && codeKey(o.model) === codeKey(l.item_code))).map((l) => l.line));
+  const leftoverInv = lines.filter((l) => !codeMatched.has(l.line));
+  const usedOrd = new Set(ordLines.map((o, i) => (lines.some((l) => codeKey(l.item_code) === codeKey(o.model) && codeKey(o.model).length >= 4) ? i : -1)));
   const leftoverOrd = ordLines.map((o, i) => ({ o, i })).filter((x) => !usedOrd.has(x.i));
   let pairs: { invoice_line: number; order_line: number }[] = [];
   if (leftoverInv.length && leftoverOrd.length) {
@@ -380,12 +398,12 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
     };
     if (!order) {
       await db.from("invoices").update({ ...base, status: "no_order", order_id: null, order_number: null, match_method: null,
-        comparison: { rows: [], candidates }, mismatch_count: 0 }).eq("id", id);
+        comparison: { rows: [], candidates, ignored: ignoredCharges(ex) }, mismatch_count: 0 }).eq("id", id);
       return;
     }
     const { rows, mismatches } = await compareWithOrder(db, ex, order);
     await db.from("invoices").update({ ...base, status: mismatches ? "mismatch" : "matched", order_id: order.id, order_number: order.number,
-      match_method: method, comparison: { rows, candidates }, mismatch_count: mismatches }).eq("id", id);
+      match_method: method, comparison: { rows, candidates, ignored: ignoredCharges(ex) }, mismatch_count: mismatches }).eq("id", id);
   } catch (e) {
     console.error(e);
     const status = (e as { status?: number })?.status;

@@ -2558,7 +2558,7 @@
       "<dt>Invoice #</dt><dd>" + esc(inv.invoice_number || "-") + "</dd>" +
       "<dt>Date</dt><dd>" + esc(inv.invoice_date || "-") + "</dd>" +
       (ex.po_number ? "<dt>PO / ref</dt><dd>" + esc(ex.po_number) + "</dd>" : "") +
-      "<dt>Total</dt><dd>" + (inv.total != null ? fmtMoney(inv.total) : "-") + (ex.freight ? " (freight " + fmtMoney(ex.freight) + ")" : "") + "</dd>" +
+      "<dt>Total</dt><dd>" + (inv.total != null ? fmtMoney(inv.total) : "-") + (ex.freight || ex.tax ? " (" + [ex.freight ? "freight/FSC " + fmtMoney(ex.freight) : "", ex.tax ? "tax " + fmtMoney(ex.tax) : ""].filter(Boolean).join(", ") + ")" : "") + "</dd>" +
       "<dt>Uploaded</dt><dd>" + esc(fmtDate(inv.created_at)) + " · " + esc((inv.uploaded_by || "").split("@")[0]) + "</dd>" +
       (inv.reviewed_by ? "<dt>Reviewed</dt><dd>" + esc(fmtDate(inv.reviewed_at)) + " · " + esc(inv.reviewed_by.split("@")[0]) + "</dd>" : "") +
       '</dl><button class="btn block" style="margin-top:10px" data-action="inv-view-file">View invoice file</button></div>';
@@ -2585,6 +2585,8 @@
       h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + " line" + (bad.length === 1 ? "" : "s") + " don't match the order:</b><br>" +
         bad.map(function (r) { return "• " + esc(r.description) + " - " + (r.status === "price" ? "billed " + fmtMoney(r.inv_price) + " vs order " + fmtMoney(r.ord_price) : "not on the order"); }).join("<br>") + "</div>"
         : '<div class="notice ok-notice">Every billed line matches the order pricing.</div>';
+      var ign = (cmp.ignored || []).filter(function (c) { return c.amount; });
+      if (ign.length) h += '<p class="hint">Not checked against the order: ' + ign.map(function (c) { return esc(c.description) + " " + fmtMoney(c.amount); }).join(", ") + ".</p>";
       h += '<div class="inv-lines">' + rows.map(invRowHtml).join("") + "</div>";
     }
 
