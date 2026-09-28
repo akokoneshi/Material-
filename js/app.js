@@ -2577,6 +2577,7 @@
     h += '<div class="card inv-head ' + inv.status + '">' + invBadge(inv.status) +
       (inv.status === "processing" ? (invStalled(inv) ? '<div class="error-text">This check is taking too long and probably stopped. Tap Re-run AI check below.</div>'
         : '<p class="hint" style="margin:8px 0 0">The AI is reading this invoice. This page updates by itself.</p>') : "") +
+      (inv.status !== "error" && inv.status !== "processing" && inv.error ? '<p class="hint" style="margin:8px 0 0">' + esc(inv.error) + "</p>" : "") +
       (inv.status === "error" ? '<div class="error-text">' + esc(inv.error || "Something went wrong.") + "</div>" +
         (function (a) { return !a ? "" : a.done ? '<p class="hint" style="margin:6px 0 0">Tried again ' + a.tries + ' times automatically. Tap Re-run AI check to try once more.</p>'
           : '<p class="hint" style="margin:6px 0 0">The app will try again by itself' + (a.due > Date.now() ? " in about " + Math.max(1, Math.round((a.due - Date.now()) / 60000)) + " min" : " shortly") + " (keep the app open), or tap Re-run AI check.</p>"; })(autoRetryInfo(inv)) : "") +

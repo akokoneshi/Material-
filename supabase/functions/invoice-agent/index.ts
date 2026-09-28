@@ -491,7 +491,7 @@ async function compareWithOrder(db: SupabaseClient, ex: Extracted, order: Order)
   return { rows, mismatches };
 }
 
-async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: string | null) {
+export async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: string | null, prevStatus?: string | null) {
   const { data: inv, error } = await db.from("invoices").select("*").eq("id", id).single();
   if (error || !inv) throw new Error("Invoice not found");
   try {
@@ -532,6 +532,15 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
       : status === 503 || status === 500 ? `${who} is overloaded right now. The app will try again in a few minutes.`
       : status === 401 || status === 403 ? `${who} rejected the API key (${status}). Check the key saved in Supabase secrets.`
       : status ? `${who} error (${status}): ${(e as Error).message}` : String((e as Error)?.message || e)) + note;
+    // If this invoice was already read successfully (by an earlier run), a failed re-check keeps that result.
+    const { data: cur } = await db.from("invoices").select("extracted, order_id, mismatch_count").eq("id", id).single();
+    if (cur?.extracted?.lines?.length) {
+      const back = prevStatus && prevStatus !== "processing" && prevStatus !== "error" ? prevStatus
+        : !cur.order_id ? "no_order" : cur.mismatch_count ? "mismatch" : "matched";
+      await db.from("invoices").update({ status: back, error: "The last re-check didn't finish: " + msg + " Showing the earlier result.",
+        updated_at: new Date().toISOString() }).eq("id", id);
+      return;
+    }
     await db.from("invoices").update({ status: "error", error: msg, updated_at: new Date().toISOString() }).eq("id", id);
   }
 }
@@ -557,8 +566,9 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     if (!body.invoice_id) return reply({ error: "invoice_id is required" }, 400);
+    const { data: before } = await db.from("invoices").select("status").eq("id", body.invoice_id).maybeSingle();
     await db.from("invoices").update({ status: "processing", error: null, updated_at: new Date().toISOString() }).eq("id", body.invoice_id);
-    const job = processInvoice(db, body.invoice_id, body.order_id || null);
+    const job = processInvoice(db, body.invoice_id, body.order_id || null, before?.status || null);
     // Keep working after replying so the app doesn't wait on a long read.
     // deno-lint-ignore no-explicit-any
     const rt = (globalThis as any).EdgeRuntime;
