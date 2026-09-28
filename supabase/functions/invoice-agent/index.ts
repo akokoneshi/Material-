@@ -20,6 +20,9 @@ const USE_GEMINI = !!Deno.env.get("GEMINI_API_KEY");
 const HAS_MISTRAL = !!Deno.env.get("MISTRAL_API_KEY");
 const MISTRAL_OCR_MODEL = Deno.env.get("MISTRAL_OCR_MODEL") || "mistral-ocr-latest";
 const MISTRAL_MODEL = Deno.env.get("MISTRAL_MODEL") || "mistral-small-latest";
+// Groq (free tier, fast) reads invoice TEXT - the app pulls the text out of text PDFs before uploading.
+const HAS_GROQ = !!Deno.env.get("GROQ_API_KEY");
+const GROQ_MODELS = (Deno.env.get("GROQ_MODEL") || "llama-3.3-70b-versatile,openai/gpt-oss-120b,llama-3.1-8b-instant").split(",").map((m: string) => m.trim()).filter(Boolean);
 // Per-request time limits keep a whole check inside the function's run time.
 const GEMINI_TIMEOUT_MS = +(Deno.env.get("GEMINI_TIMEOUT_MS") || 40000);
 const MISTRAL_TIMEOUT_MS = +(Deno.env.get("MISTRAL_TIMEOUT_MS") || 60000);
@@ -64,6 +67,7 @@ type Extracted = {
   tax: number | null;
   total: number | null;
   lines: InvoiceLine[];
+  read_by?: string; // which AI read it (not part of what the AI returns)
 };
 
 const nullable = (type: string) => ({ type: [type, "null"] });
@@ -256,27 +260,72 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
 // What we send the model: an optional file plus text instructions.
 type AskInput = { file?: { mediaType: string; base64: string }; text: string };
 
+// Which AI answered the last askJSON call (shown on the invoice).
+let lastReadBy = "";
+
+// Try each available AI in turn; a busy, rate-limited or failing one hands over to the next.
+// Text (from a text PDF): Groq -> Gemini -> Mistral. A file (scan/photo): Gemini -> Mistral OCR.
 export async function askJSON<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
-  if (USE_GEMINI) {
+  const chain: { name: string; run: (quick: boolean) => Promise<T> }[] = [];
+  if (!input.file && HAS_GROQ) chain.push({ name: "Groq", run: () => askGroq<T>(input, schema) });
+  if (USE_GEMINI) chain.push({ name: "Gemini", run: (quick) => askGemini<T>(input, schema, quick) });
+  if (HAS_MISTRAL) chain.push({ name: "Mistral", run: () => askMistral<T>(input, schema) });
+  if (Deno.env.get("ANTHROPIC_API_KEY")) chain.push({ name: "Claude", run: () => askClaude<T>(input, schema) });
+  if (!chain.length) throw new Error("No AI key is set up for reading this invoice.");
+  const failed: string[] = [];
+  let last: unknown;
+  for (let k = 0; k < chain.length; k++) {
+    const p = chain[k];
     try {
-      return await askGemini<T>(input, schema);
+      const out = await p.run(k < chain.length - 1);
+      lastReadBy = p.name;
+      return out;
     } catch (e) {
-      // Gemini stayed busy / over its free limit: let Mistral do it instead.
-      const st = (e as { status?: number })?.status;
-      const busy = st === 503 || st === 429 || st === 500 || st === 504 || st === 404;
-      if (!busy) throw e;
-      if (!HAS_MISTRAL) throw Object.assign(e as object, { provider: "Gemini", note: "No MISTRAL_API_KEY secret was found, so there was no backup." });
-      console.warn(`Gemini unavailable (${st}); using Mistral`);
-      try {
-        return await askMistral<T>(input, schema);
-      } catch (m) {
-        console.error("Mistral failed too", m);
-        throw Object.assign(withStatus(m) as object, { provider: "Mistral", note: `Gemini was unavailable first (${st}).` });
-      }
+      last = Object.assign(withStatus(e) as object, { provider: p.name });
+      const st = (last as { status?: number })?.status;
+      console.warn(`${p.name} failed (${st || (e as Error)?.message}); trying the next AI`);
+      failed.push(`${p.name} ${st ? "(" + st + ")" : "failed"}`);
     }
   }
-  if (HAS_MISTRAL && !Deno.env.get("ANTHROPIC_API_KEY")) return await askMistral<T>(input, schema);
-  return await askClaude<T>(input, schema);
+  if (failed.length > 1) (last as { note?: string }).note = `Also unavailable: ${failed.slice(0, -1).join(", ")}.`;
+  throw last;
+}
+
+async function askGroq<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
+  let last: unknown;
+  for (const model of GROQ_MODELS) {
+    for (const wait of [0, 5000]) {
+      if (wait) await sleep(wait);
+      let res: Response;
+      try {
+        res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${Deno.env.get("GROQ_API_KEY")}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model, temperature: 0, max_tokens: 8192, response_format: { type: "json_object" },
+            messages: [{ role: "user", content: input.text + "\n\nRespond with only JSON matching this JSON Schema:\n" + JSON.stringify(schema) }],
+          }),
+          signal: AbortSignal.timeout(45000),
+        });
+      } catch (e) {
+        throw Object.assign(new Error("Groq took too long to answer"), { status: 504, cause: e });
+      }
+      if (res.ok) {
+        const j = await res.json();
+        const text = j.choices?.[0]?.message?.content;
+        if (!text) throw new Error("Groq returned no result.");
+        return JSON.parse(text) as T;
+      }
+      const body = await res.text();
+      last = Object.assign(new Error(`Groq error ${res.status}`), { status: res.status, body });
+      // 429: busy/over the per-minute limit - wait once, then try the next model (each has its own limit).
+      // 413 (too big for this model's free limit), 404/400 (model retired or can't do JSON): next model.
+      if (res.status === 429 && wait === 0) continue;
+      if ([400, 404, 413, 429, 500, 502, 503].includes(res.status)) break;
+      throw last;
+    }
+  }
+  throw last;
 }
 
 // Mistral errors carry statusCode; the rest of this file looks at status.
@@ -352,7 +401,7 @@ async function askMistral<T>(input: AskInput, schema: Record<string, unknown>): 
   return JSON.parse(out) as T;
 }
 
-async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
+async function askGemini<T>(input: AskInput, schema: Record<string, unknown>, quick = false): Promise<T> {
   const ai = new GoogleGenAI({ apiKey: Deno.env.get("GEMINI_API_KEY")! });
   const parts: { inlineData?: { mimeType: string; data: string }; text?: string }[] = [];
   if (input.file) parts.push({ inlineData: { mimeType: input.file.mediaType, data: input.file.base64 } });
@@ -375,9 +424,9 @@ async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): P
   // A model Google has retired (404) is skipped too.
   const call = async (withSchema: boolean) => {
     let last: unknown;
-    // With Mistral as a backup, hand over quickly instead of waiting out Gemini (functions have a time limit).
-    const models = HAS_MISTRAL ? [MODEL, GEMINI_BACKUP_MODEL] : [...new Set([MODEL, GEMINI_BACKUP_MODEL, GEMINI_LAST_MODEL])];
-    const waits = HAS_MISTRAL ? [0, 3000] : [0, 5000, 12000, 20000];
+    // With another AI after this one, hand over quickly instead of waiting out Gemini (functions have a time limit).
+    const models = quick ? [MODEL, GEMINI_BACKUP_MODEL] : [...new Set([MODEL, GEMINI_BACKUP_MODEL, GEMINI_LAST_MODEL])];
+    const waits = quick ? [0, 3000] : [0, 5000, 12000, 20000];
     for (const model of models) {
       for (const wait of waits) {
         if (wait) await sleep(wait);
@@ -387,7 +436,7 @@ async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): P
           last = e;
           const st = (e as { status?: number })?.status;
           if (st === 404) break;
-          if (st === 504 && HAS_MISTRAL) throw e; // don't wait out a hung Gemini; Mistral takes over
+          if (st === 504 && quick) throw e; // don't wait out a hung Gemini; the next AI takes over
           if (st !== 503 && st !== 429 && st !== 500 && st !== 504) throw e;
         }
       }
@@ -438,6 +487,59 @@ async function askClaude<T>(input: AskInput, schema: Record<string, unknown>): P
 async function extractInvoice(bytes: Uint8Array, mediaType: string): Promise<Extracted> {
   return await askJSON<Extracted>({ file: { mediaType, base64: encodeBase64(bytes) }, text: EXTRACT_PROMPT }, EXTRACT_SCHEMA);
 }
+async function extractFromText(text: string): Promise<Extracted> {
+  const prompt = EXTRACT_PROMPT.replace("You are reading a vendor invoice", "You are reading the text of a vendor invoice (pulled from the PDF; columns are separated by spaces)") +
+    "\n\nINVOICE TEXT:\n" + text.slice(0, 40000);
+  const ex = await askJSON<Extracted>({ text: prompt }, EXTRACT_SCHEMA);
+  ex.other_references = ex.other_references || [];
+  ex.lines = (ex.lines || []).map((l, i) => ({ ...l, line: l.line || i + 1 }));
+  return ex;
+}
+
+// ---------------------------------------------------------------- reading without AI
+// Last resort when every AI is busy: find the item codes of our orders in the invoice text and read
+// qty x unit price = extended from the same line. Lines billed under other codes can't be seen this way.
+const numOf = (s: string) => +s.replace(/,/g, "");
+export function scanText(text: string, orders: Order[]): Extracted | null {
+  const head = text.slice(0, 3000);
+  const vendorHit = SUPPLIER_ALIASES.map(([re]) => head.match(re)).find(Boolean);
+  const supplier = vendorHit ? supplierFromVendor(vendorHit[0]) : null;
+  const flat = refKey(text);
+  const byNumber = orders.filter((o) => o.number && flat.includes(refKey(o.number)));
+  const pool = byNumber.length ? byNumber : orders.filter((o) => !supplier || o.supplier === supplier);
+  const codes = new Map<string, string>();
+  pool.forEach((o) => (o.data?.lines || []).forEach((l) => { const k = codeKey(l.model); if (k.length >= 4) codes.set(k, l.model || ""); }));
+  const lines: InvoiceLine[] = [];
+  const unitRe = /\b(LF|FT|EA|EACH|RL|ROLL|BX|BOX|SF|GAL|GA|CS|CASE|PC|LB|PR|SH|CT|PK|BG)\b/i;
+  for (const raw of text.split(/\n/)) {
+    const tokens = raw.split(/\s+/).filter(Boolean);
+    const hit = tokens.find((t) => codes.has(codeKey(t)));
+    if (!hit) continue;
+    // Numbers, also with a unit stuck on: 54ft, 3.664/ft, $4,187.30
+    const nums = tokens.filter((t) => t !== hit).map((t) => t.match(/^\$?(\d[\d,]*(?:\.\d+)?)(?:\/?[A-Za-z]{1,4})?$/)).filter(Boolean).map((m) => numOf(m![1]));
+    let best: { q: number; p: number; e: number } | null = null;
+    // Invoices list quantity, then unit price, then the extension: find a < b < c with qty x price = extension.
+    for (let a = 0; a < nums.length; a++) for (let b = a + 1; b < nums.length; b++) for (let c = b + 1; c < nums.length; c++) {
+      const q = nums[a], p = nums[b], e = nums[c];
+      if (q > 0 && p > 0 && e > 0 && Math.abs(q * p - e) <= Math.max(0.02, e * 0.005)) best = { q, p, e };
+    }
+    if (!best) continue;
+    const unit = raw.match(unitRe)?.[1]?.toUpperCase() || null;
+    lines.push({ line: lines.length + 1, item_code: codes.get(codeKey(hit)) || hit, description: raw.replace(/\s+/g, " ").trim().slice(0, 140),
+      quantity: best.q, unit: unit === "EACH" ? "EA" : unit, unit_price: best.p, extended: best.e });
+  }
+  if (!lines.length) return null;
+  const money = (re: RegExp) => { const m = [...text.matchAll(re)].pop(); return m ? numOf(m[m.length - 1]) : null; };
+  return {
+    vendor_name: vendorHit ? vendorHit[0] : null,
+    invoice_number: text.match(/invoice\s*(?:no\.?|number|num|#)?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-\/]*\d[A-Z0-9\-\/]*)/i)?.[1] || null,
+    invoice_date: text.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/)?.[0] || null,
+    po_number: byNumber[0]?.number || null, job_reference: null, other_references: [],
+    subtotal: money(/sub\s*-?\s*total[^\d\n]*([\d,]+\.\d{2})/gi), freight: money(/(?:freight|fuel|fsc)[^\d\n]*([\d,]+\.\d{2})/gi),
+    tax: money(/\btax\b[^\d\n]*([\d,]+\.\d{2})/gi), total: money(/(?:invoice\s*)?total(?:\s*due)?[^\d\n]*([\d,]+\.\d{2})/gi),
+    lines,
+  };
+}
 
 // Pair invoice lines with order lines by description when item codes didn't match.
 async function agentMatchLines(invLines: InvoiceLine[], ordLines: OrderLine[]): Promise<{ invoice_line: number; order_line: number }[]> {
@@ -483,7 +585,8 @@ async function compareWithOrder(db: SupabaseClient, ex: Extracted, order: Order)
   const leftoverOrd = ordLines.map((o, i) => ({ o, i })).filter((x) => !usedOrd.has(x.i));
   let pairs: { invoice_line: number; order_line: number }[] = [];
   if (leftoverInv.length && leftoverOrd.length) {
-    const local = await agentMatchLines(leftoverInv, leftoverOrd.map((x) => x.o));
+    // If every AI is busy, the lines just stay unpaired (flagged for a person to look at).
+    const local = await agentMatchLines(leftoverInv, leftoverOrd.map((x) => x.o)).catch((e) => { console.warn("line matching skipped", e); return []; });
     pairs = local.map((p) => ({ invoice_line: p.invoice_line, order_line: leftoverOrd[p.order_line - 1] ? leftoverOrd[p.order_line - 1].i + 1 : -1 }));
   }
   const rows = compare(ex, order, pairs);
@@ -496,14 +599,31 @@ export async function processInvoice(db: SupabaseClient, id: string, forcedOrder
   if (error || !inv) throw new Error("Invoice not found");
   try {
     let ex: Extracted = inv.extracted;
+    const orders = await loadOrders(db);
     if (!ex || !forcedOrderId) {
-      const file = await db.storage.from("invoices").download(inv.file_path);
-      if (file.error) throw file.error;
-      const mediaType = inv.file_type || (/\.pdf$/i.test(inv.file_name || "") ? "application/pdf" : "image/jpeg");
-      ex = await extractInvoice(new Uint8Array(await file.data.arrayBuffer()), mediaType);
+      // The app saves the text of text PDFs next to the file; reading text is lighter than reading the PDF.
+      let text = "";
+      const t = await db.storage.from("invoices").download(inv.file_path + ".txt");
+      if (!t.error && t.data) text = await t.data.text();
+      const hasText = text.replace(/\s/g, "").length > 80 && /\d/.test(text);
+      try {
+        if (hasText) {
+          ex = await extractFromText(text);
+        } else {
+          const file = await db.storage.from("invoices").download(inv.file_path);
+          if (file.error) throw file.error;
+          const mediaType = inv.file_type || (/\.pdf$/i.test(inv.file_name || "") ? "application/pdf" : "image/jpeg");
+          ex = await extractInvoice(new Uint8Array(await file.data.arrayBuffer()), mediaType);
+        }
+        ex.read_by = lastReadBy + (hasText ? " (from the PDF text)" : "");
+      } catch (e) {
+        const scanned = hasText ? scanText(text, orders) : null;
+        if (!scanned) throw e;
+        ex = scanned;
+        ex.read_by = "Text scan, no AI (every AI was busy). Only lines with this order's item codes were checked.";
+      }
     }
     const supplier = supplierFromVendor(ex.vendor_name);
-    const orders = await loadOrders(db);
     let order: Order | null = null, method: string | null = null, candidates: { id: string; number: string | null; score: number }[] = [];
     if (forcedOrderId) { order = orders.find((o) => o.id === forcedOrderId) || null; method = "manual"; }
     else ({ order, method, candidates } = findOrder(ex, supplier, orders));
@@ -523,7 +643,7 @@ export async function processInvoice(db: SupabaseClient, id: string, forcedOrder
   } catch (e) {
     console.error(e);
     const status = (e as { status?: number })?.status;
-    const who = (e as { provider?: string })?.provider || (USE_GEMINI ? "Gemini" : HAS_MISTRAL ? "Mistral" : "The AI service");
+    const who = (e as { provider?: string })?.provider || "The AI service";
     const detail = errorDetail(e), step = (e as { step?: string })?.step;
     const note = (detail ? ` ${who} said: "${detail}"` + (step ? ` (while ${step}).` : ".") : "") +
       ((e as { note?: string })?.note ? " " + (e as { note?: string }).note : "");

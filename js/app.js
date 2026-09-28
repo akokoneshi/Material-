@@ -2339,6 +2339,42 @@
     });
   }
 
+  // Invoice PDFs: the text laid out line by line (items on the same row joined left to right),
+  // so the invoice agent can read table rows as text. Empty for scanned PDFs.
+  function readPdfLines(file) {
+    return import(new URL("js/vendor/pdfjs/pdf.min.mjs", location.href).href).then(function (pdfjs) {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL("js/vendor/pdfjs/pdf.worker.min.mjs", location.href).href;
+      return file.arrayBuffer().then(function (buf) { return pdfjs.getDocument({ data: buf }).promise; }).then(function (doc) {
+        var pages = [];
+        for (var i = 1; i <= Math.min(doc.numPages, 30); i++) pages.push(i);
+        return Promise.all(pages.map(function (n) {
+          return doc.getPage(n).then(function (pg) { return pg.getTextContent(); }).then(function (tc) {
+            var rows = [];
+            tc.items.forEach(function (x) {
+              if (!x.str || !x.str.trim()) return;
+              var y = x.transform[5], row = rows.filter(function (r) { return Math.abs(r.y - y) < 3; })[0];
+              if (!row) { row = { y: y, items: [] }; rows.push(row); }
+              row.items.push({ x: x.transform[4], s: x.str.trim() });
+            });
+            rows.sort(function (a, b) { return b.y - a.y; });
+            return "--- Page " + n + " ---\n" + rows.map(function (r) {
+              return r.items.sort(function (a, b) { return a.x - b.x; }).map(function (it) { return it.s; }).join("   ");
+            }).join("\n");
+          });
+        })).then(function (t) { var all = t.join("\n\n"); return all.replace(/--- Page \d+ ---|\s/g, "").length > 80 ? all : ""; });
+      });
+    }).catch(function () { return ""; });
+  }
+  function isPdf(nameOrType) { return /pdf/i.test(nameOrType || ""); }
+  // Older invoices (uploaded before text was saved): pull the text from the stored PDF before a re-run.
+  function ensureInvoiceText(inv) {
+    var done = store.get("invTextDone", {});
+    if (done[inv.id] || !(isPdf(inv.file_type) || isPdf(inv.file_name))) return Promise.resolve();
+    return Cloud.downloadInvoiceFile(inv.file_path).then(function (blob) { return readPdfLines(blob); })
+      .then(function (text) { return Cloud.saveInvoiceText(inv.file_path, text); })
+      .then(function () { var d = store.get("invTextDone", {}); d[inv.id] = 1; store.set("invTextDone", d); }, function () {});
+  }
+
   function importPriceFile(b, file) {
     var lookup = supplierIndex(b.supplier);
     toast("Reading " + file.name + "…");
@@ -2504,7 +2540,7 @@
       var a = autoRetryInfo(inv);
       if (!a || a.done || Date.now() < a.due) return;
       var m = store.get("invAutoRetry", {}); m[inv.id] = a.tries + 1; store.set("invAutoRetry", m);
-      Cloud.runInvoiceAgent(inv.id).then(refreshInvoices).then(function () {
+      ensureInvoiceText(inv).then(function () { return Cloud.runInvoiceAgent(inv.id); }).then(refreshInvoices).then(function () {
         if (state.view === "invoices" || state.view === "invoice") { render(); pollInvoices(); }
       }, function () { /* try again next time */ });
     });
@@ -2559,7 +2595,10 @@
       if (!files.length) return;
       if (!navigator.onLine) { toast("Connect to the internet to upload invoices"); return; }
       toast("Uploading " + files.length + " invoice" + (files.length === 1 ? "" : "s") + "…");
-      Promise.all(files.map(function (f) { return Cloud.uploadInvoice(f).then(null, function (e) { toast(f.name + ": " + (e.message || "upload failed")); }); }))
+      Promise.all(files.map(function (f) {
+        return (isPdf(f.type) || isPdf(f.name) ? readPdfLines(f) : Promise.resolve("")).then(function (text) { return Cloud.uploadInvoice(f, text); })
+          .then(null, function (e) { toast(f.name + ": " + (e.message || "upload failed")); });
+      }))
         .then(refreshInvoices).then(function () { state.invFilter = "processing"; render(); });
     });
     pollInvoices();
@@ -2587,6 +2626,7 @@
       "<dt>Date</dt><dd>" + esc(inv.invoice_date || "-") + "</dd>" +
       (ex.po_number ? "<dt>PO / ref</dt><dd>" + esc(ex.po_number) + "</dd>" : "") +
       "<dt>Total</dt><dd>" + (inv.total != null ? fmtMoney(inv.total) : "-") + (ex.freight || ex.tax ? " (" + [ex.freight ? "freight/FSC " + fmtMoney(ex.freight) : "", ex.tax ? "tax " + fmtMoney(ex.tax) : ""].filter(Boolean).join(", ") + ")" : "") + "</dd>" +
+      (ex.read_by ? "<dt>Read by</dt><dd>" + esc(ex.read_by) + "</dd>" : "") +
       "<dt>Uploaded</dt><dd>" + esc(fmtDate(inv.created_at)) + " · " + esc((inv.uploaded_by || "").split("@")[0]) + "</dd>" +
       (inv.reviewed_by ? "<dt>Reviewed</dt><dd>" + esc(fmtDate(inv.reviewed_at)) + " · " + esc(inv.reviewed_by.split("@")[0]) + "</dd>" : "") +
       '</dl><button class="btn block" style="margin-top:10px" data-action="inv-view-file">View invoice file</button></div>';
@@ -3046,7 +3086,8 @@
     },
     "inv-rerun": function () {
       var inv = currentInvoice();
-      Cloud.runInvoiceAgent(inv.id).then(refreshInvoices).then(function () { toast("AI is re-checking this invoice"); render(); }, function (e) { alert(e.message); });
+      toast("Re-checking…");
+      ensureInvoiceText(inv).then(function () { return Cloud.runInvoiceAgent(inv.id); }).then(refreshInvoices).then(function () { toast("AI is re-checking this invoice"); render(); }, function (e) { alert(e.message); });
     },
     "inv-approve": function () {
       var inv = currentInvoice();

@@ -165,6 +165,11 @@ Who can see invoices: admins, and people given **Can review invoices** in Users 
 1. **SQL Editor:** run [`supabase/invoices.sql`](supabase/invoices.sql). It creates the table, permission, and a private `invoices` storage bucket.
 2. Get an AI key. Either one works:
    - **Gemini (free tier):** aistudio.google.com → Get API key. Add it as the secret `GEMINI_API_KEY`.
+   - **Groq (free, recommended for testing):** console.groq.com → API Keys. Add it as the secret `GROQ_API_KEY`.
+     The app pulls the text out of text PDFs when you upload them (saved next to the file as `.txt`), and Groq
+     reads that text. Scanned invoices/photos still go to Gemini, then Mistral.
+     Order tried for text: Groq → Gemini → Mistral. If every AI is busy, a no-AI text scan still checks the
+     lines whose item codes are on the order (the invoice page says "Read by: Text scan").
    - **Mistral (free backup, optional):** console.mistral.ai → Experiment plan → API keys. Add it as the secret
      `MISTRAL_API_KEY`. When Gemini is busy or over its free limit, the agent reads the invoice with Mistral
      instead (Mistral OCR, then `mistral-small-latest`). The PDF copy sent to Mistral is deleted right after reading.

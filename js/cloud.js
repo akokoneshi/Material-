@@ -266,10 +266,19 @@
   };
 
   // Upload the file, create the invoice record, then start the AI agent on it.
-  Cloud.uploadInvoice = function (file) {
+  // The text of a text PDF, saved next to it as <path>.txt so the invoice agent can read text instead of the PDF.
+  Cloud.saveInvoiceText = function (path, text) {
+    if (!text) return Promise.resolve();
+    var blob = new Blob([text], { type: "text/plain" });
+    return client.storage.from("invoices").upload(path + ".txt", blob, { contentType: "text/plain", upsert: false })
+      .then(function () {}, function () { /* already saved, or not allowed: the agent reads the PDF instead */ });
+  };
+
+  Cloud.uploadInvoice = function (file, text) {
     var safe = String(file.name || "invoice").replace(/[^\w.\-]+/g, "_").slice(-80);
     var path = new Date().toISOString().slice(0, 10) + "/" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) + "_" + safe;
     return client.storage.from("invoices").upload(path, file, { contentType: file.type || undefined, upsert: false }).then(must)
+      .then(function () { return Cloud.saveInvoiceText(path, text); })
       .then(function () {
         return client.from("invoices").insert({ file_path: path, file_name: file.name, file_type: file.type || null, status: "processing" })
           .select("id").single().then(must);
