@@ -257,6 +257,7 @@
     var g = /foamglas|cellglas|cellular glass/.test(n) ? "Foamglas / Cellular Glass"
       : /fiberglass|fbg|\bfg\b|fipc|ultra jm/.test(n) ? "Fiberglass"
       : /saddle|shield|tps/.test(n) ? "Saddles & Shields"
+      : /\bpvc\b|zeston|proto/.test(n) ? "PVC Jacketing & Fittings"
       : /alum|weatherjac|ell-jac|jacket|c&r|c\/r/.test(n) ? "Aluminum Jacketing & Fittings"
       : /armaflex|aeroflex|aerocel|ilock|insul-lock|kflex|kfit|rubatex|elastomeric/.test(n) ? "Elastomeric"
       : /board|wrap|blanket|blkt|thermax|polyiso|iso\b|microflex|microlite/.test(n) ? "Board & Wrap"
