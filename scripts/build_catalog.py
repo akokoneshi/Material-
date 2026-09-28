@@ -8,7 +8,11 @@ Usage:
 Expected columns (first sheet, header row 1):
     Item Name | Unit | Categories | Expected Price | Manufacturer | Model Number | Internal Identifier | UPC
 "Manufacturer" is treated as the supplier the item is ordered from.
+
+data/source/model_overrides.csv (supplier,id,model,note) replaces the model number of listed items,
+e.g. to use a supplier's own part numbers from a quote. Prices are never changed by it.
 """
+import csv
 import json
 import os
 import sys
@@ -19,6 +23,7 @@ import openpyxl
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "data", "source", "Material_Dashboard.xlsx")
 OUT = os.path.join(ROOT, "data", "catalog.js")
+OVERRIDES = os.path.join(ROOT, "data", "source", "model_overrides.csv")
 
 UNIT_ALIASES = {"GALLON": "GAL", "QUART": "QT", "BOX": "BX", "SHT": "SH"}
 
@@ -48,6 +53,13 @@ def main():
             lst.append(value)
         return idx[kind][value]
 
+    overrides = {}
+    if os.path.exists(OVERRIDES):
+        with open(OVERRIDES, newline="", encoding="utf-8") as f:
+            for o in csv.DictReader(f):
+                overrides[(o["supplier"].strip(), o["id"].strip())] = o["model"].strip()
+    used = set()
+
     seen = set()
     for r in rows:
         name = clean(r[c_name])
@@ -63,6 +75,9 @@ def main():
             price = 0
         model = clean(r[c_model])
         iid = clean(r[c_id]) or f"{sup}:{model or name}"
+        if (sup, iid) in overrides:
+            model = overrides[(sup, iid)]
+            used.add((sup, iid))
         key = f"{sup}|{iid}"
         if key in seen:  # keep ids unique within a supplier
             iid = f"{iid}-{len(items)}"
@@ -91,6 +106,9 @@ def main():
         f.write("window.CATALOG = ")
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
         f.write(";\n")
+    for k in overrides.keys() - used:
+        print(f"WARNING: model override for {k[0]} item {k[1]} matched nothing")
+    print(f"Applied {len(used)} model overrides")
     print(f"Wrote {len(items)} items, {len(suppliers)} suppliers, {len(categories)} categories -> {OUT}")
 
 

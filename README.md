@@ -101,6 +101,9 @@ The app is static files, with no server code and no build step.
 The **Manufacturer** column is used as the supplier. Items priced at 0 show as "Price TBD" and are
 left out of the order total.
 
+`data/source/model_overrides.csv` swaps in a different model number for specific items (for example GIC's
+own part numbers, taken from a GIC quote) every time the price list is rebuilt. It never changes prices.
+
 ## Tests
 
 ```
