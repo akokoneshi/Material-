@@ -2490,8 +2490,10 @@
   }
   // When the AI service was busy, re-run the check by itself a few minutes later (up to 3 times per invoice).
   var BUSY_RE = /overloaded|limit was reached|high demand|\b(429|503)\b/i, AUTO_TRIES = 3, AUTO_WAIT = 2 * 60 * 1000;
+  // A check that has said "processing" for over 4 minutes was cut off (e.g. the function's time limit).
+  function invStalled(inv) { return inv.status === "processing" && Date.now() - new Date(inv.updated_at || inv.created_at).getTime() > 4 * 60 * 1000; }
   function autoRetryInfo(inv) {
-    if (inv.status !== "error" || !BUSY_RE.test(inv.error || "")) return null;
+    if (!invStalled(inv) && (inv.status !== "error" || !BUSY_RE.test(inv.error || ""))) return null;
     var tries = (store.get("invAutoRetry", {})[inv.id] || 0);
     if (tries >= AUTO_TRIES) return { done: true, tries: tries };
     return { done: false, tries: tries, due: new Date(inv.updated_at || inv.created_at).getTime() + AUTO_WAIT };
@@ -2514,7 +2516,7 @@
     if (state.view !== "invoices" && state.view !== "invoice") return;
     var waiting = getInvoices().some(function (i) { var a = autoRetryInfo(i); return a && !a.done; });
     if (waiting) invPoll = setTimeout(function () { autoRetryInvoices(); pollInvoices(); }, 20000);
-    if (!getInvoices().some(function (i) { return i.status === "processing"; })) return;
+    if (!getInvoices().some(function (i) { return i.status === "processing" && !invStalled(i); })) return;
     clearTimeout(invPoll);
     invPoll = setTimeout(function () {
       refreshInvoices().then(function () { if (state.view === "invoices" || state.view === "invoice") { var y = window.scrollY; render(); window.scrollTo(0, y); } });
@@ -2573,7 +2575,8 @@
     var h = topbar(inv.invoice_number ? "Invoice #" + inv.invoice_number : "Invoice", inv.vendor_name || inv.supplier || inv.file_name || "", backBtn("invoices", "Invoices"));
     h += '<main class="page">';
     h += '<div class="card inv-head ' + inv.status + '">' + invBadge(inv.status) +
-      (inv.status === "processing" ? '<p class="hint" style="margin:8px 0 0">The AI is reading this invoice. This page updates by itself.</p>' : "") +
+      (inv.status === "processing" ? (invStalled(inv) ? '<div class="error-text">This check is taking too long and probably stopped. Tap Re-run AI check below.</div>'
+        : '<p class="hint" style="margin:8px 0 0">The AI is reading this invoice. This page updates by itself.</p>') : "") +
       (inv.status === "error" ? '<div class="error-text">' + esc(inv.error || "Something went wrong.") + "</div>" +
         (function (a) { return !a ? "" : a.done ? '<p class="hint" style="margin:6px 0 0">Tried again ' + a.tries + ' times automatically. Tap Re-run AI check to try once more.</p>'
           : '<p class="hint" style="margin:6px 0 0">The app will try again by itself' + (a.due > Date.now() ? " in about " + Math.max(1, Math.round((a.due - Date.now()) / 60000)) + " min" : " shortly") + " (keep the app open), or tap Re-run AI check.</p>"; })(autoRetryInfo(inv)) : "") +
@@ -2588,7 +2591,7 @@
       '</dl><button class="btn block" style="margin-top:10px" data-action="inv-view-file">View invoice file</button></div>';
 
     // order match
-    if (inv.status !== "processing") {
+    if (inv.status !== "processing" || invStalled(inv)) {
       h += "<h3>Matched order</h3><div class=\"card\">";
       if (order || inv.order_number) {
         h += '<div class="t-title">Order ' + esc(inv.order_number || (order && order.number) || "") + "</div>" +
@@ -2615,7 +2618,7 @@
     }
 
     // actions
-    if (inv.status !== "processing") {
+    if (inv.status !== "processing" || invStalled(inv)) {
       h += '<h3>Review</h3><div class="card"><label class="field"><span>Notes</span><textarea class="input" id="inv-notes" placeholder="Anything to remember about this invoice">' + esc(inv.notes || "") + "</textarea></label>" +
         '<div class="btn-row">' +
         (inv.status !== "approved" ? '<button class="btn brand" data-action="inv-approve">Approve invoice</button>' : "") +

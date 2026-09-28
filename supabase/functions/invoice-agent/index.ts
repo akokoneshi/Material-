@@ -340,9 +340,11 @@ async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): P
   // A model Google has retired (404) is skipped too.
   const call = async (withSchema: boolean) => {
     let last: unknown;
-    const models = [...new Set([MODEL, GEMINI_BACKUP_MODEL, GEMINI_LAST_MODEL])];
+    // With Mistral as a backup, hand over quickly instead of waiting out Gemini (functions have a time limit).
+    const models = HAS_MISTRAL ? [MODEL, GEMINI_BACKUP_MODEL] : [...new Set([MODEL, GEMINI_BACKUP_MODEL, GEMINI_LAST_MODEL])];
+    const waits = HAS_MISTRAL ? [0, 3000] : [0, 5000, 12000, 20000];
     for (const model of models) {
-      for (const wait of [0, 5000, 12000, 20000]) {
+      for (const wait of waits) {
         if (wait) await sleep(wait);
         try {
           return await callModel(model, withSchema);
