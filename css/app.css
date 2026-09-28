@@ -413,3 +413,7 @@ details summary { cursor: pointer; padding: 6px 0; }
 .request-toggle { align-items: flex-start; background: var(--kim-blue-tint); border-radius: 10px; padding: 10px 12px; margin: 0 0 14px; }
 .request-toggle small { display: block; font-weight: 500; color: var(--muted); font-size: 13px; }
 .req-card .t-sub { margin-bottom: 10px; }
+
+/* Icons inside titles/tiles never grow past the text size. */
+.t-title svg:not(.ico-inline), .tile .t-main svg:not(.ico-inline) { width: 1.15em; height: 1.15em; vertical-align: -0.2em; margin-right: 4px; flex: none; }
+.pull-alert .t-title svg { color: var(--kim-red); }
