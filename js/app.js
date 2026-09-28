@@ -274,7 +274,9 @@
         if (!it) {
           var id = String(x.item_key).split("|").slice(1).join("|");
           it = { idx: -1, key: x.item_key, id: id, supplier: b.supplier, name: x.item_name || id, unit: String(x.unit || "EA").toUpperCase(),
-            category: jobItemCategory(x.item_name), price: +x.price || 0, model: id.replace(/^Q-/, ""), jobOnly: true, jobs: {} };
+            category: jobItemCategory(x.item_name), price: +x.price || 0,
+            // Show the vendor's code as the part #, but not keys built from a description (e.g. Q-HAMFAB-TYPE-1000-...).
+            model: /^Q-[A-Z0-9.\/]+$/.test(id) ? id.slice(2) : "", jobOnly: true, jobs: {} };
           BY_KEY[it.key] = it;
           added.push(it);
         }
