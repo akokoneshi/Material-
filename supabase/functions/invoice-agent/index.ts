@@ -263,9 +263,16 @@ export async function askJSON<T>(input: AskInput, schema: Record<string, unknown
     } catch (e) {
       // Gemini stayed busy / over its free limit: let Mistral do it instead.
       const st = (e as { status?: number })?.status;
-      if (!HAS_MISTRAL || (st !== 503 && st !== 429 && st !== 500 && st !== 504 && st !== 404)) throw e;
+      const busy = st === 503 || st === 429 || st === 500 || st === 504 || st === 404;
+      if (!busy) throw e;
+      if (!HAS_MISTRAL) throw Object.assign(e as object, { provider: "Gemini", note: "No MISTRAL_API_KEY secret was found, so there was no backup." });
       console.warn(`Gemini unavailable (${st}); using Mistral`);
-      return await askMistral<T>(input, schema);
+      try {
+        return await askMistral<T>(input, schema);
+      } catch (m) {
+        console.error("Mistral failed too", m);
+        throw Object.assign(withStatus(m) as object, { provider: "Mistral", note: `Gemini was unavailable first (${st}).` });
+      }
     }
   }
   if (HAS_MISTRAL && !Deno.env.get("ANTHROPIC_API_KEY")) return await askMistral<T>(input, schema);
@@ -282,43 +289,49 @@ function withStatus(e: unknown): unknown {
   return e;
 }
 
+// Mistral's free plan allows about 1 request per second: space the calls out, and retry "too many requests".
+let lastMistralCall = 0;
+async function mistralCall<R>(fn: () => Promise<R>): Promise<R> {
+  let last: unknown;
+  for (const wait of [0, 3000, 8000, 15000]) {
+    if (wait) await sleep(wait);
+    const gap = lastMistralCall + 1300 - Date.now();
+    if (gap > 0) await sleep(gap);
+    lastMistralCall = Date.now();
+    try { return await fn(); } catch (e) {
+      last = withStatus(e);
+      const st = (last as { status?: number })?.status;
+      if (st !== 429 && st !== 500 && st !== 502 && st !== 503) throw last; // a timeout (504) isn't retried
+    }
+  }
+  throw last;
+}
+
 async function mistralOCR(client: Mistral, file: { mediaType: string; base64: string }): Promise<string> {
   if (file.mediaType.startsWith("image/")) {
-    const res = await client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "image_url", imageUrl: `data:${file.mediaType};base64,${file.base64}` } });
+    const res = await mistralCall(() => client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "image_url", imageUrl: `data:${file.mediaType};base64,${file.base64}` } }));
     return res.pages.map((p) => p.markdown).join("\n\n");
   }
   // PDFs: upload, read, then delete the copy on Mistral's side right away.
   const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
-  const up = await client.files.upload({ file: { fileName: "invoice.pdf", content: bytes }, purpose: "ocr" });
+  const up = await mistralCall(() => client.files.upload({ file: { fileName: "invoice.pdf", content: bytes }, purpose: "ocr" }));
   try {
-    const res = await client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "file", fileId: up.id } });
+    const res = await mistralCall(() => client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "file", fileId: up.id } }));
     return res.pages.map((p, i) => `--- Page ${i + 1} ---\n${p.markdown}`).join("\n\n");
   } finally {
-    await client.files.delete({ fileId: up.id }).catch(() => {});
+    await mistralCall(() => client.files.delete({ fileId: up.id })).catch(() => {});
   }
 }
 
 async function askMistral<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
   const client = new Mistral({ apiKey: Deno.env.get("MISTRAL_API_KEY")!, timeoutMs: MISTRAL_TIMEOUT_MS });
-  const retry = async <R>(fn: () => Promise<R>): Promise<R> => {
-    let last: unknown;
-    for (const wait of [0, 4000, 10000]) {
-      if (wait) await sleep(wait);
-      try { return await fn(); } catch (e) {
-        last = withStatus(e);
-        const st = (last as { status?: number })?.status;
-        if (st !== 429 && st !== 500 && st !== 502 && st !== 503) throw last; // a timeout (504) isn't retried
-      }
-    }
-    throw last;
-  };
   let text = input.text;
   if (input.file) {
-    const ocr = await retry(() => mistralOCR(client, input.file!));
+    const ocr = await mistralOCR(client, input.file!);
     if (!ocr.trim()) throw new Error("The AI couldn't find any text in this file.");
     text += "\n\nThe invoice, converted to text (tables in markdown):\n\n" + ocr;
   }
-  const res = await retry(() => client.chat.complete({
+  const res = await mistralCall(() => client.chat.complete({
     model: MISTRAL_MODEL,
     temperature: 0,
     responseFormat: { type: "json_object" },
@@ -501,10 +514,13 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
   } catch (e) {
     console.error(e);
     const status = (e as { status?: number })?.status;
-    const msg = status === 504 ? "The AI took too long to answer. The app will try again in a few minutes."
-      : status === 429 ? "The AI service's free-tier limit was reached. The app will try again in a few minutes."
-      : status === 503 || status === 500 ? "The AI service is overloaded right now (Google's side). The app will try again in a few minutes."
-      : status ? `AI service error (${status}): ${(e as Error).message}` : String((e as Error)?.message || e);
+    const who = (e as { provider?: string })?.provider || (USE_GEMINI ? "Gemini" : HAS_MISTRAL ? "Mistral" : "The AI service");
+    const note = (e as { note?: string })?.note ? " " + (e as { note?: string }).note : "";
+    const msg = (status === 504 ? `${who} took too long to answer. The app will try again in a few minutes.`
+      : status === 429 ? `${who}'s free-tier limit was reached (too many requests). The app will try again in a few minutes.`
+      : status === 503 || status === 500 ? `${who} is overloaded right now. The app will try again in a few minutes.`
+      : status === 401 || status === 403 ? `${who} rejected the API key (${status}). Check the key saved in Supabase secrets.`
+      : status ? `${who} error (${status}): ${(e as Error).message}` : String((e as Error)?.message || e)) + note;
     await db.from("invoices").update({ status: "error", error: msg, updated_at: new Date().toISOString() }).eq("id", id);
   }
 }
