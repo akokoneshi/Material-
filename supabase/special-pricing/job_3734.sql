@@ -425,7 +425,7 @@ select 'd13a3734-5e1d-4c0b-9a2f-3734d1b00001'::uuid, k, n, u, p from (values
 -- ---------------------------------------------------------------- Homans (CT-Homans)
 insert into public.price_book_items (book_id, item_key, item_name, unit, price)
 select '6f04a05c-18b2-4fed-aa93-597b61efeb5c'::uuid, k, n, u, p from (values
-  ('CT-Homans|CT00372', '1-3/8 X 1 (60) SS Armaflex Black Lapseal PC', 'FT', 3.29),
+  ('CT-Homans|Q-SST13810', '1 3/8" X 1" SS Armaflex Black Lapseal Pipe Insulation', 'FT', 3.29),
   ('CT-Homans|Q-BST13820', '1 3/8" X 2" (18) SS Armaflex Black Lapseal Pipe Insulation', 'FT', 14.05),
   ('CT-Homans|CT00532', '3/4" X 1" Fiberglass Pipe Covering', 'FT', 1.44),
   ('CT-Homans|CT00446', '1" X 1" Fiberglass Pipe Covering', 'FT', 1.55),
@@ -440,7 +440,7 @@ select '6f04a05c-18b2-4fed-aa93-597b61efeb5c'::uuid, k, n, u, p from (values
   ('CT-Homans|CT00570', '8" X 1" Fiberglass Pipe Covering', 'FT', 6.15),
   ('CT-Homans|CT00423', '10" X 1" Fiberglass Pipe Covering', 'FT', 6.52),
   ('CT-Homans|CT00432', '1 1/2" X 1 1/2" Fiberglass Pipe Covering', 'FT', 3.06),
-  ('CT-Homans|CT00485', '2" X 1 1/2" Fiberglass Pipe Covering (JM2112FBG)', 'FT', 3.37),
+  ('CT-Homans|Q-JM2112FBG', '2" X 1 1/2" HP Fiberglass Pipe Covering ASJ/SSL', 'FT', 3.37),
   ('CT-Homans|CT00516', '3" X 1 1/2" Fiberglass Pipe Covering', 'FT', 3.79),
   ('CT-Homans|CT00534', '4" X 1 1/2" Fiberglass Pipe Covering', 'FT', 4.31),
   ('CT-Homans|CT00545', '5" X 1 1/2" Fiberglass Pipe Covering', 'FT', 4.83),
@@ -635,7 +635,7 @@ select '6f04a05c-18b2-4fed-aa93-597b61efeb5c'::uuid, k, n, u, p from (values
   ('CT-Homans|CT00678', '2.2" X 48" X 75'' R6 JM Microlite FSK Duct Wrap', 'EA', 98.28),
   ('CT-Homans|CT00410', '2" X 24" X 48" 3# FSK Fiberglass Board Spin-Glas 814', 'SF', 1.55),
   ('CT-Homans|CT00670', '2" X 36" X 26'' JM Microflex FSK Pipe & Tank Wrap', 'EA', 278.85),
-  ('CT-Homans|CT00209', '1" X 36" X 48" AP Armaflex Sheet (6/CT)', 'EA', 36.96),
+  ('CT-Homans|Q-APS10043', '1" X 36" X 48" AP Armaflex Sheet (6/CT, 72 SF/CT)', 'EA', 36.96),
   ('CT-Homans|Q-SEALROLL020', 'Stucco Embossed Aluminum .020 X 36" X 100'' Roll', 'RL', 551.82),
   ('CT-Homans|Q-SEALROLL032', 'Stucco Embossed Aluminum .032 X 36" X 150'' Roll', 'RL', 453.71),
   ('CT-Homans|CT00026', '520 Adhesive 1 Gallon (4/CS) Armacell', 'EA', 102.88),
