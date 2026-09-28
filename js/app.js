@@ -60,7 +60,10 @@
 
   var indexed = false;
   function ensureIndex() {
-    if (!indexed) { S.buildIndex(ITEMS); indexed = true; }
+    if (!indexed) {
+      S.buildIndex(ITEMS.concat(Object.keys(BY_KEY).map(function (k) { return BY_KEY[k]; }).filter(function (it) { return it.jobOnly; })));
+      indexed = true;
+    }
   }
 
   // ---------------------------------------------------------------- storage
@@ -245,7 +248,47 @@
     });
     return bookIdx;
   }
-  function setBooks(b) { store.set("books", b); bookIdx = null; }
+  function setBooks(b) { store.set("books", b); bookIdx = null; registerJobItems(); }
+
+  // Quote lines in a job's books that aren't in the regular price list (e.g. Foamglas from a vendor quote).
+  // They become items that can be ordered only on that job, from that supplier, at the quoted price.
+  function jobItemCategory(name) {
+    var n = String(name).toLowerCase();
+    var g = /foamglas|cellglas|cellular glass/.test(n) ? "Foamglas / Cellular Glass"
+      : /fiberglass|fbg|\bfg\b|fipc|ultra jm/.test(n) ? "Fiberglass"
+      : /saddle|shield|tps/.test(n) ? "Saddles & Shields"
+      : /alum|weatherjac|ell-jac|jacket|c&r|c\/r/.test(n) ? "Aluminum Jacketing & Fittings"
+      : /armaflex|aeroflex|aerocel|ilock|insul-lock|kflex|kfit|rubatex|elastomeric/.test(n) ? "Elastomeric"
+      : /board|wrap|blanket|blkt|thermax|polyiso|iso\b|microflex|microlite/.test(n) ? "Board & Wrap"
+      : /tape|mastic|adhesive|adh\b|cp-?3|chil|polyg|rg2400|pittwrap/.test(n) ? "Tapes, Mastics & Adhesives"
+      : /pin|staple|screw|wire|seal|band|strap/.test(n) ? "Fasteners & Banding" : "Other";
+    return "Job Quote Items > " + g;
+  }
+  function registerJobItems() {
+    var added = [];
+    Object.keys(BY_KEY).forEach(function (k) { if (BY_KEY[k].jobOnly) BY_KEY[k].jobs = {}; });
+    getBooks().filter(function (b) { return b.active; }).forEach(function (b) {
+      (b.items || []).forEach(function (x) {
+        var it = BY_KEY[x.item_key];
+        if (it && !it.jobOnly) return;
+        if (!it) {
+          var id = String(x.item_key).split("|").slice(1).join("|");
+          it = { idx: -1, key: x.item_key, id: id, supplier: b.supplier, name: x.item_name || id, unit: String(x.unit || "EA").toUpperCase(),
+            category: jobItemCategory(x.item_name), price: +x.price || 0, model: id.replace(/^Q-/, ""), jobOnly: true, jobs: {} };
+          BY_KEY[it.key] = it;
+          added.push(it);
+        }
+        bookJobs(b).forEach(function (jk) { it.jobs[jk] = 1; });
+        if (+x.price < it.price || !it.price) it.price = +x.price || 0;
+      });
+    });
+    if (added.length && indexed) S.buildIndex(added);
+  }
+  function jobItems(job, supplier) {
+    var jk = jobKey(job), out = [];
+    Object.keys(BY_KEY).forEach(function (k) { var it = BY_KEY[k]; if (it.jobOnly && it.supplier === supplier && it.jobs[jk]) out.push(it); });
+    return out;
+  }
   function refreshBooks() {
     if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
     return Cloud.listBooks().then(function (b) { setBooks(b); store.set("booksSetupMissing", false); }, function (e) {
@@ -730,7 +773,9 @@
     if (state.view === "lookup") return state.lookupSupplier ? BY_SUPPLIER[state.lookupSupplier] : ITEMS;
     if (state.view === "book-add") { var bk = currentBook(); return bk ? BY_SUPPLIER[bk.supplier] || [] : []; }
     var o = currentOrder();
-    return o ? BY_SUPPLIER[o.supplier] || [] : [];
+    if (!o) return [];
+    var extra = jobItems(o.jobNumber, o.supplier);
+    return extra.length ? (BY_SUPPLIER[o.supplier] || []).concat(extra) : BY_SUPPLIER[o.supplier] || [];
   }
 
   VIEWS.build = function () {
@@ -3221,6 +3266,7 @@
   // ---------------------------------------------------------------- start
   try { history.replaceState({ v: "home" }, ""); } catch (e) { /* ignore */ }
   addCatalogExtras(store.get("catalogExtra", []));
+  registerJobItems();
   if (!Cloud.enabled) {
     render();
   } else {

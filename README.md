@@ -117,6 +117,10 @@ Everything else uses the regular price list. Crews don't have to do anything. If
 once, whether in one book or across a job's books, the **lowest** price wins. Draft orders re-price
 automatically when books change; sent orders keep the prices they were sent with.
 
+**Job quote items:** a book line that isn't in the regular price list (e.g. Foamglas or saddles from a vendor
+quote, keyed `<supplier>|Q-<vendor code>`) becomes an item crews can search and order, but **only** on that
+job and supplier, under **Job Quote Items** when browsing.
+
 **Adding a book:** Special Pricing → New price book (job #s + supplier) → then either
 **Add item** (search and type the job price) or **Import Excel / CSV / PDF**. The importer reads:
 - supplier Excel/CSV/ODS price sheets (finds the item-code and price columns on the best sheet)
