@@ -650,6 +650,62 @@ select '17d2b251-bc62-5d76-89be-65e406b70dfe'::uuid, k, n, u, p from (values
   ('CT-SPI|Q-ZESTON-COLOR-PVC-.020-C/C-SSL-#30', 'ZESTON COLOR PVC .020 C/C SSL #30', 'LF', 7.69608),
   ('CT-SPI|Q-ZESTON-COLOR-PVC-.020-C/C-SSL-#19', 'ZESTON COLOR PVC .020 C/C SSL #19', 'LF', 3.90931)
 ) v(k, n, u, p);
+
+-- JM Ultra (model ending UJ): priced the same as the AJ model on this job's quote (e.g. FIPC01510UJ = FIPC01510AJ).
+--   CT-DI · DI binder (2.21.26) (154 items): 44 Ultra items
+insert into public.price_book_items (book_id, item_key, item_name, unit, price) values
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07525', '3/4" (1-1/8) X 1" (126) ULTRA JM FIBERGLASS PC', 'LF', 1.2309),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07529', '1" (1-3/8) X 1" (135) ULTRA JM FIBERGLASS PC', 'LF', 1.3196),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07535', '1-1/4" (1-5/8")X1" (135) ULTRA JM FIBERGLASS PC', 'LF', 1.4304),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07541', '1-1/2" X 1" (99) ULTRA JM FIBERGLASS PC', 'LF', 1.5413),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07548', '2" X 1" (99) ULTRA JM FIBERGLASS PC', 'LF', 1.6689),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07561', '3" X 1" (60) ULTRA JM FIBERGLASS PC', 'LF', 2.0292),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07577', '4" X 1" (42) ULTRA JM FIBERGLASS PC', 'LF', 2.6891),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07601', '6" X 1" (24) ULTRA JM FIBERGLASS PC', 'LF', 3.2213),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07643', '12" X 1" (6) ULTRA JM FIBERGLASS PC', 'LF', 6.0767),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07526', '3/4" (1-1/8")X1-1/2"(99) ULTRA JM FIBERGLASS PC', 'LF', 2.1457),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07530', '1" (1-3/8) X 1-1/2" (99) ULTRA JM FIBERGLASS PC', 'LF', 2.2954),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07536', '1-1/4"(1-5/8)X1-1/2"(75) ULTRA JM FIBERGLASS PC', 'LF', 2.5006),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07542', '1-1/2" X 1-1/2" (75) ULTRA JM FIBERGLASS PC', 'LF', 2.617),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07549', '2" X 1-1/2" (60) ULTRA JM FIBERGLASS PC', 'LF', 2.8831),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07562', '3" X 1-1/2" (42) ULTRA JM FIBERGLASS PC', 'LF', 3.238),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07527', '3/4" (1-1/8) X 2" (75) ULTRA JM FIBERGLASS PC', 'LF', 3.4264),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07531', '1" (1-3/8") X 2" (60) ULTRA JM FIBERGLASS PC', 'LF', 3.6482),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07543', '1-1/2" X 2" (42) ULTRA JM FIBERGLASS PC', 'LF', 4.0198),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07550', '2" X 2" (42) ULTRA JM FIBERGLASS PC', 'LF', 4.2304),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07557', '2-1/2" X 2" (33) ULTRA JM FIBERGLASS PC', 'LF', 4.5576),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07563', '3" X 2" (33) ULTRA JM FIBERGLASS PC', 'LF', 4.8348),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07579', '4" X 2" (24) ULTRA JM FIBERGLASS PC', 'LF', 5.6442),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07603', '6" X 2" (15) ULTRA JM FIBERGLASS PC', 'LF', 6.6533),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07617', '8" X 2" (9) ULTRA JM FIBERGLASS PC', 'LF', 8.0893),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07631', '10" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 9.6861),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07645', '12" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 10.856),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07652', '14" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 14.5376),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07666', '16" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 15.9569),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07694', '20" X 2" (3) ULTRA JM FIBERGLASS PC', 'LF', 21.8063),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07719', '24" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 23.4641),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07569', '3-1/2" X 1" (42) ULTRA JM FIBERGLASS PC', 'LF', 2.2011),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07593', '5" X 1" (33) ULTRA JM FIBERGLASS PC', 'LF', 3.0328),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07622', '9" X 1" (12) ULTRA JM FIBERGLASS PC', 'LF', 5.5444),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07636', '11" X 1" (6) ULTRA JM FIBERGLASS PC', 'LF', 5.6442),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07685', '19" X 1" (6) ULTRA JM FIBERGLASS PC', 'LF', 12.48),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07586', '4-1/2" X 1-1/2" (24) ULTRA JM FIBERGLASS PC', 'LF', 3.8479),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07594', '5" X 1-1/2" (24) ULTRA JM FIBERGLASS PC', 'LF', 4.1251),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07602', '6" X 1-1/2" (18) ULTRA JM FIBERGLASS PC', 'LF', 4.3579),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07616', '8" X 1-1/2" (12) ULTRA JM FIBERGLASS PC', 'LF', 6.1044),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07610', '7" X 2" (12) ULTRA JM FIBERGLASS PC', 'LF', 7.5737),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07624', '9" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 8.8822),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07638', '11" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 10.795),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07687', '19" X 2" (3) ULTRA JM FIBERGLASS PC', 'LF', 20.0377),
+  ('839f02a4-bd20-430b-a978-a1246faa8002', 'CT-DI|CT07701', '21" X 2" (6) ULTRA JM FIBERGLASS PC', 'LF', 22.0558)
+on conflict (book_id, item_key) do update set price = excluded.price, item_name = excluded.item_name, unit = excluded.unit, updated_at = now();
+--   CT-SPI · SPI quote - Regeneron B20 CUP Wet Rev 5 BAFO (156 items): 2 Ultra items
+insert into public.price_book_items (book_id, item_key, item_name, unit, price) values
+  ('17d2b251-bc62-5d76-89be-65e406b70dfe', 'CT-SPI|CT22277', '2 1/2" X 2" Fiberglass Pipe Covering (Ultra)', 'FT', 5.2069),
+  ('17d2b251-bc62-5d76-89be-65e406b70dfe', 'CT-SPI|CT22280', '4" X 2" Fiberglass Pipe Covering (Ultra)', 'FT', 6.44828)
+on conflict (book_id, item_key) do update set price = excluded.price, item_name = excluded.item_name, unit = excluded.unit, updated_at = now();
+-- end JM Ultra
+
 commit;
 
 -- Check: price books for this job and their item counts.
