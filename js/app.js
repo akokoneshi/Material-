@@ -2626,6 +2626,9 @@
         '<button class="btn" data-action="inv-rerun">Re-run AI check</button>' +
         (isAdmin() ? '<button class="btn danger" data-action="inv-delete">Delete</button>' : "") + "</div>" +
         (inv.sent_back_at ? '<div class="hint" style="margin:8px 0 0">Sent back to supplier ' + esc(fmtDate(inv.sent_back_at)) + ".</div>" : "") + "</div>";
+    } else {
+      h += '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="inv-stop">Cancel check</button>' +
+        (isAdmin() ? '<button class="btn danger" data-action="inv-delete">Delete invoice</button>' : "") + "</div>";
     }
     return h + "</main>";
   };
@@ -3051,6 +3054,12 @@
         .then(refreshInvoices).then(function () { toast("Invoice approved"); render(); }, function (e) { toast(e.message); });
     },
     "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
+    "inv-stop": function () {
+      var inv = currentInvoice();
+      if (!confirm("Cancel this check? You can re-run it or delete the invoice afterwards.")) return;
+      Cloud.updateInvoice(inv.id, { status: "error", error: "Check cancelled. Tap Re-run AI check to try again." })
+        .then(refreshInvoices).then(function () { toast("Check cancelled"); render(); }, function (e) { toast(e.message); });
+    },
     "inv-delete": function () {
       var inv = currentInvoice();
       if (!confirm("Delete this invoice and its file?")) return;
