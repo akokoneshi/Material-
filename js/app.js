@@ -437,7 +437,7 @@
           Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ }),
           refreshStock(),
           refreshBooks(),
-          refreshInvoices(),
+          refreshInvoices().then(autoRetryInvoices),
           sendCatalogRequests().then(refreshCatalog)
         ]); });
       })
@@ -2488,12 +2488,34 @@
       if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) store.set("invoicesSetupMissing", true);
     });
   }
-  // While the agent is working, check back every few seconds.
+  // When the AI service was busy, re-run the check by itself a few minutes later (up to 3 times per invoice).
+  var BUSY_RE = /overloaded|limit was reached|high demand|\b(429|503)\b/i, AUTO_TRIES = 3, AUTO_WAIT = 2 * 60 * 1000;
+  function autoRetryInfo(inv) {
+    if (inv.status !== "error" || !BUSY_RE.test(inv.error || "")) return null;
+    var tries = (store.get("invAutoRetry", {})[inv.id] || 0);
+    if (tries >= AUTO_TRIES) return { done: true, tries: tries };
+    return { done: false, tries: tries, due: new Date(inv.updated_at || inv.created_at).getTime() + AUTO_WAIT };
+  }
+  function autoRetryInvoices() {
+    if (!canReviewInvoices() || !navigator.onLine) return;
+    getInvoices().forEach(function (inv) {
+      var a = autoRetryInfo(inv);
+      if (!a || a.done || Date.now() < a.due) return;
+      var m = store.get("invAutoRetry", {}); m[inv.id] = a.tries + 1; store.set("invAutoRetry", m);
+      Cloud.runInvoiceAgent(inv.id).then(refreshInvoices).then(function () {
+        if (state.view === "invoices" || state.view === "invoice") { render(); pollInvoices(); }
+      }, function () { /* try again next time */ });
+    });
+  }
+  // While the agent is working (or a busy retry is waiting), check back every few seconds.
   var invPoll = null;
   function pollInvoices() {
     clearTimeout(invPoll);
     if (state.view !== "invoices" && state.view !== "invoice") return;
+    var waiting = getInvoices().some(function (i) { var a = autoRetryInfo(i); return a && !a.done; });
+    if (waiting) invPoll = setTimeout(function () { autoRetryInvoices(); pollInvoices(); }, 20000);
     if (!getInvoices().some(function (i) { return i.status === "processing"; })) return;
+    clearTimeout(invPoll);
     invPoll = setTimeout(function () {
       refreshInvoices().then(function () { if (state.view === "invoices" || state.view === "invoice") { var y = window.scrollY; render(); window.scrollTo(0, y); } });
     }, 4000);
@@ -2552,7 +2574,9 @@
     h += '<main class="page">';
     h += '<div class="card inv-head ' + inv.status + '">' + invBadge(inv.status) +
       (inv.status === "processing" ? '<p class="hint" style="margin:8px 0 0">The AI is reading this invoice. This page updates by itself.</p>' : "") +
-      (inv.status === "error" ? '<div class="error-text">' + esc(inv.error || "Something went wrong.") + "</div>" : "") +
+      (inv.status === "error" ? '<div class="error-text">' + esc(inv.error || "Something went wrong.") + "</div>" +
+        (function (a) { return !a ? "" : a.done ? '<p class="hint" style="margin:6px 0 0">Tried again ' + a.tries + ' times automatically. Tap Re-run AI check to try once more.</p>'
+          : '<p class="hint" style="margin:6px 0 0">The app will try again by itself' + (a.due > Date.now() ? " in about " + Math.max(1, Math.round((a.due - Date.now()) / 60000)) + " min" : " shortly") + " (keep the app open), or tap Re-run AI check.</p>"; })(autoRetryInfo(inv)) : "") +
       '<dl class="kv" style="margin-top:10px">' +
       "<dt>Vendor</dt><dd>" + esc(inv.vendor_name || "-") + (inv.supplier ? " (" + esc(inv.supplier) + ")" : "") + "</dd>" +
       "<dt>Invoice #</dt><dd>" + esc(inv.invoice_number || "-") + "</dd>" +
