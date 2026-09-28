@@ -1,13 +1,15 @@
 // Supabase Edge Function: "invoice-agent"
-// Reads an uploaded vendor invoice with Claude, finds the matching material order, and compares
+// Reads an uploaded vendor invoice with AI, finds the matching material order, and compares
 // every line's pricing against the order. Results land in public.invoices for review in the app.
 //
 // Deploy: Dashboard > Edge Functions > Deploy a new function > Via Editor, name it "invoice-agent",
 // paste this file, Deploy. Then in the function's Settings turn OFF "Verify JWT" (this code checks the
 // caller itself).
-// AI provider - add ONE of these under Edge Functions > Secrets:
-//   GEMINI_API_KEY     Google Gemini (free tier available at aistudio.google.com). Used if set.
-//   ANTHROPIC_API_KEY  Anthropic Claude.
+// AI providers - add any of these under Edge Functions > Secrets (tried in this order, next one if busy):
+//   GROQ_API_KEY       Groq (free) - reads the invoice text the app pulls out of text PDFs.
+//   GEMINI_API_KEY     Google Gemini (free tier at aistudio.google.com) - text, scanned PDFs and photos.
+//   MISTRAL_API_KEY    Mistral (free) - backup.
+//   ANTHROPIC_API_KEY  Anthropic Claude (paid).
 import Anthropic from "npm:@anthropic-ai/sdk@^0.128.0";
 import { Mistral } from "npm:@mistralai/mistralai@^2.7.0";
 import { GoogleGenAI, FinishReason } from "npm:@google/genai@^2.24.0";
@@ -674,7 +676,7 @@ Deno.serve(async (req) => {
     let key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     if (!key) { try { key = (Object.values(JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}"))[0] as string) || ""; } catch { /* ignore */ } }
     if (!key) return reply({ error: "Function has no service key available" }, 500);
-    if (!Deno.env.get("GEMINI_API_KEY") && !Deno.env.get("MISTRAL_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) return reply({ error: "Add a GEMINI_API_KEY (or MISTRAL_API_KEY) secret for this function" }, 500);
+    if (!["GEMINI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "ANTHROPIC_API_KEY"].some((k) => Deno.env.get(k))) return reply({ error: "Add a GEMINI_API_KEY or GROQ_API_KEY secret for this function" }, 500);
     const db = createClient(url, key);
 
     const token = (req.headers.get("Authorization") || "").replace(/^Bearer /i, "");
