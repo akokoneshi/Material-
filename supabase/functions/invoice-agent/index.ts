@@ -280,6 +280,15 @@ export async function askJSON<T>(input: AskInput, schema: Record<string, unknown
 }
 
 // Mistral errors carry statusCode; the rest of this file looks at status.
+// The reason the service gave, e.g. {"message":"Service tier capacity exceeded for this model."}
+function errorDetail(e: unknown): string {
+  const body = (e as { body?: string })?.body;
+  let d = "";
+  if (body) {
+    try { const j = JSON.parse(body); d = j.message || j.detail?.[0]?.msg || j.detail || j.error?.message || ""; } catch { d = body; }
+  }
+  return String(d || "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
 function withStatus(e: unknown): unknown {
   const sc = (e as { statusCode?: number })?.statusCode;
   if (sc && !(e as { status?: number }).status) (e as { status?: number }).status = sc;
@@ -291,7 +300,7 @@ function withStatus(e: unknown): unknown {
 
 // Mistral's free plan allows about 1 request per second: space the calls out, and retry "too many requests".
 let lastMistralCall = 0;
-async function mistralCall<R>(fn: () => Promise<R>): Promise<R> {
+async function mistralCall<R>(fn: () => Promise<R>, step: string): Promise<R> {
   let last: unknown;
   for (const wait of [0, 3000, 8000, 15000]) {
     if (wait) await sleep(wait);
@@ -299,7 +308,7 @@ async function mistralCall<R>(fn: () => Promise<R>): Promise<R> {
     if (gap > 0) await sleep(gap);
     lastMistralCall = Date.now();
     try { return await fn(); } catch (e) {
-      last = withStatus(e);
+      last = Object.assign(withStatus(e) as object, { step });
       const st = (last as { status?: number })?.status;
       if (st !== 429 && st !== 500 && st !== 502 && st !== 503) throw last; // a timeout (504) isn't retried
     }
@@ -309,17 +318,17 @@ async function mistralCall<R>(fn: () => Promise<R>): Promise<R> {
 
 async function mistralOCR(client: Mistral, file: { mediaType: string; base64: string }): Promise<string> {
   if (file.mediaType.startsWith("image/")) {
-    const res = await mistralCall(() => client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "image_url", imageUrl: `data:${file.mediaType};base64,${file.base64}` } }));
+    const res = await mistralCall(() => client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "image_url", imageUrl: `data:${file.mediaType};base64,${file.base64}` } }), "reading the image (OCR)");
     return res.pages.map((p) => p.markdown).join("\n\n");
   }
   // PDFs: upload, read, then delete the copy on Mistral's side right away.
   const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
-  const up = await mistralCall(() => client.files.upload({ file: { fileName: "invoice.pdf", content: bytes }, purpose: "ocr" }));
+  const up = await mistralCall(() => client.files.upload({ file: { fileName: "invoice.pdf", content: bytes }, purpose: "ocr" }), "uploading the PDF");
   try {
-    const res = await mistralCall(() => client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "file", fileId: up.id } }));
+    const res = await mistralCall(() => client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "file", fileId: up.id } }), "reading the PDF (OCR)");
     return res.pages.map((p, i) => `--- Page ${i + 1} ---\n${p.markdown}`).join("\n\n");
   } finally {
-    await mistralCall(() => client.files.delete({ fileId: up.id })).catch(() => {});
+    await mistralCall(() => client.files.delete({ fileId: up.id }), "deleting the copy").catch(() => {});
   }
 }
 
@@ -336,7 +345,7 @@ async function askMistral<T>(input: AskInput, schema: Record<string, unknown>): 
     temperature: 0,
     responseFormat: { type: "json_object" },
     messages: [{ role: "user", content: text + "\n\nRespond with only JSON matching this JSON Schema:\n" + JSON.stringify(schema) }],
-  }));
+  }), "extracting the invoice data");
   const content = res.choices?.[0]?.message?.content;
   const out = typeof content === "string" ? content : (content || []).map((c) => ("text" in c ? c.text : "")).join("");
   if (!out) throw new Error("The AI returned no result.");
@@ -515,7 +524,9 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
     console.error(e);
     const status = (e as { status?: number })?.status;
     const who = (e as { provider?: string })?.provider || (USE_GEMINI ? "Gemini" : HAS_MISTRAL ? "Mistral" : "The AI service");
-    const note = (e as { note?: string })?.note ? " " + (e as { note?: string }).note : "";
+    const detail = errorDetail(e), step = (e as { step?: string })?.step;
+    const note = (detail ? ` ${who} said: "${detail}"` + (step ? ` (while ${step}).` : ".") : "") +
+      ((e as { note?: string })?.note ? " " + (e as { note?: string }).note : "");
     const msg = (status === 504 ? `${who} took too long to answer. The app will try again in a few minutes.`
       : status === 429 ? `${who}'s free-tier limit was reached (too many requests). The app will try again in a few minutes.`
       : status === 503 || status === 500 ? `${who} is overloaded right now. The app will try again in a few minutes.`
