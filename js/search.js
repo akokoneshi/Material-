@@ -165,12 +165,27 @@
       var hay = nameLc + " " + String(it.category || "").toLowerCase() + " " + String(it.model || "").toLowerCase();
       var extra = "";
       for (var t = 0; t < ITEM_TAGS.length; t++) if (ITEM_TAGS[t][0].test(hay)) extra += " " + ITEM_TAGS[t][1];
+      it._code = codeNorm(it.model);
       it._nameTokens = uniq(tokenize(nameLc + extra));
       it._allTokens = uniq(tokenize(hay + extra));
       it._dims = itemDims(it.name);
       it._sortKey = it._dims.map(function (d) { return d.v; });
     }
     return items;
+  }
+
+  // Item codes compare without spaces, dashes, dots or slashes: "FIPC-030 10AJ" = "fipc03010aj".
+  function codeNorm(s) { return String(s || "").toLowerCase().replace(/[\s\-_.\/#]+/g, ""); }
+
+  // Does the query look like (the start of) a part number rather than words/sizes?
+  // e.g. FIPC030, JM341, 28516, ALEL02 - one "word" with digits, not a size like 3x1 or #20.
+  function codeQuery(query, parsed) {
+    var raw = String(query || "").trim();
+    if (!raw || /\s/.test(raw) || parsed.dims.length > 1) return "";
+    var q = codeNorm(raw);
+    if (q.length < 3 || !/\d/.test(q)) return "";
+    if (!/[a-z]/.test(q) && q.length < 4) return ""; // "90", "#20", "100" are not codes
+    return q;
   }
 
   function uniq(a) {
@@ -245,6 +260,23 @@
     var partial = false;
     if (!scored.length && partialList.length) { scored = partialList; partial = true; }
     scored.sort(function (a, b) { return b.s - a.s || compareSize(a.it, b.it); });
+    // Part numbers match as you type: items whose code starts with (then contains) what was typed come first.
+    var cq = codeQuery(query, parsed), codeHits = [];
+    if (cq) {
+      for (var c = 0; c < items.length; c++) {
+        var ci = items[c];
+        if (opts.filter && !opts.filter(ci)) continue;
+        var code = ci._code != null ? ci._code : codeNorm(ci.model);
+        var at = code ? code.indexOf(cq) : -1;
+        if (at >= 0) codeHits.push({ it: ci, s: (at === 0 ? 1000 : 500) - code.length });
+      }
+      codeHits.sort(function (a, b) { return b.s - a.s || compareSize(a.it, b.it); });
+      if (codeHits.length) {
+        var seen = new Set(codeHits.map(function (x) { return x.it; }));
+        scored = codeHits.concat(partial ? [] : scored.filter(function (x) { return !seen.has(x.it); }));
+        partial = false;
+      }
+    }
     return {
       results: scored.map(function (x) { return x.it; }),
       partial: partial,

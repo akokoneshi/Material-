@@ -234,6 +234,28 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
     const idx = p.order_line - 1;
     if (!pairOf.has(p.invoice_line) && idx >= 0 && idx < ordLines.length && !used.has(idx)) { used.add(idx); pairOf.set(p.invoice_line, idx); }
   });
+  // The same product billed on more than one invoice line (e.g. two shipments): the extra lines go to the
+  // order line with that item code too, and the quantities are checked together.
+  lines.forEach((l) => {
+    const k = codeKey(l.item_code);
+    if (pairOf.has(l.line) || k.length < 4) return;
+    const idx = ordLines.findIndex((o) => codeKey(o.model) === k);
+    if (idx >= 0) pairOf.set(l.line, idx);
+  });
+  // Quantities per item code (all invoice lines vs all order lines for it), and per paired order line.
+  const billedFor = new Map<number, number>(), billedByCode = new Map<string, number>(), orderedByCode = new Map<string, number>();
+  const invCountByCode = new Map<string, number>();
+  lines.forEach((l) => {
+    const idx = pairOf.get(l.line);
+    if (idx == null) return;
+    if (l.quantity != null) billedFor.set(idx, (billedFor.get(idx) || 0) + l.quantity);
+    const k = codeKey(ordLines[idx].model);
+    if (k.length >= 4) { billedByCode.set(k, (billedByCode.get(k) || 0) + (l.quantity || 0)); invCountByCode.set(k, (invCountByCode.get(k) || 0) + 1); }
+  });
+  ordLines.forEach((o) => { const k = codeKey(o.model); if (k.length >= 4) orderedByCode.set(k, (orderedByCode.get(k) || 0) + o.qty); });
+  const ordCountByCode = (k: string) => ordLines.filter((o) => codeKey(o.model) === k).length;
+  const qtyText = (b: number, t: number) => (b < t ? `Billed ${+b.toFixed(3)} of ${+t.toFixed(3)} ordered` : `Billed ${+b.toFixed(3)}, only ${+t.toFixed(3)} ordered`);
+
   const rows: CompareRow[] = lines.map((l) => {
     const idx = pairOf.get(l.line);
     const o = idx == null ? null : ordLines[idx];
@@ -242,15 +264,32 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
       unit: l.unit, inv_qty: l.quantity, inv_price: l.unit_price, job_price: !!o?.special,
     };
     if (!o) return { ...base, ord_qty: null, ord_price: null, price_diff: null, status: "not_on_order", qty_note: null, matched_by: null };
-    const qtyNote = l.quantity != null && Math.abs(l.quantity - o.qty) > 1e-6
-      ? (l.quantity < o.qty ? `Billed ${l.quantity} of ${o.qty} ordered` : `Billed ${l.quantity}, only ${o.qty} ordered`) : null;
+    const k = codeKey(o.model);
+    let qtyNote: string | null = null;
+    if (k.length >= 4 && ((invCountByCode.get(k) || 0) > 1 || ordCountByCode(k) > 1)) {
+      // Item on several invoice and/or order lines: check the totals.
+      const b = billedByCode.get(k) || 0, t = orderedByCode.get(k) || 0;
+      qtyNote = Math.abs(b - t) > 1e-6 ? qtyText(b, t) + " (all lines for this item)" : "On more than one line; totals match";
+    } else {
+      const b = billedFor.get(idx!) ?? l.quantity;
+      if (b != null && Math.abs(b - o.qty) > 1e-6) qtyNote = qtyText(b, o.qty);
+    }
     const diff = l.unit_price == null ? null : Math.round((l.unit_price - o.price) * 10000) / 10000;
     const status = l.unit_price == null ? "no_price" : o.price > 0 && priceMismatch(l.unit_price, o.price) ? "price" : "ok";
     return { ...base, ord_qty: o.qty, ord_price: o.price, price_diff: diff, status, qty_note: qtyNote,
       matched_by: codeKey(l.item_code) === codeKey(o.model) && codeKey(o.model).length >= 4 ? "code" : "agent" } as CompareRow;
   });
+  // An order line not billed on its own, but its item was billed on another line: covered by the totals check.
   ordLines.forEach((o, i) => {
     if (used.has(i)) return;
+    const k = codeKey(o.model);
+    if (k.length >= 4 && billedByCode.has(k)) {
+      const b = billedByCode.get(k)!, t = orderedByCode.get(k)!;
+      rows.push({ invoice_line: null, order_line: i + 1, code: o.model || null, description: o.name, unit: o.unit, inv_qty: null, ord_qty: o.qty,
+        inv_price: null, ord_price: o.price, price_diff: null, status: "ok", job_price: !!o.special, matched_by: "code",
+        qty_note: "Billed together with the other line(s) for this item: " + (Math.abs(b - t) > 1e-6 ? qtyText(b, t) : "totals match") });
+      return;
+    }
     rows.push({ invoice_line: null, order_line: i + 1, code: o.model || null, description: o.name, unit: o.unit, inv_qty: null, ord_qty: o.qty,
       inv_price: null, ord_price: o.price, price_diff: null, status: "not_invoiced", qty_note: null, job_price: !!o.special, matched_by: null });
   });

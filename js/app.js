@@ -314,7 +314,7 @@
     var changed = false;
     o.lines.forEach(function (l) {
       if (isShop(l) || l.custom) return;
-      var it = BY_KEY[l.key];
+      var it = BY_KEY[l.itemKey || l.key];
       if (!it) return;
       var p = priceFor(o, it);
       if (l.price !== p.price || !!l.special !== p.special) {
@@ -883,7 +883,7 @@
   function resultsHtml(list) {
     var o = state.view === "build" ? currentOrder() : null;
     var inOrder = {};
-    if (o) o.lines.forEach(function (l) { if (l.key) inOrder[l.key] = l; });
+    if (o) o.lines.forEach(function (l) { var k = l.itemKey || l.key; if (k && !inOrder[k]) inOrder[k] = l; });
     var showSup = state.view === "lookup";
     // Price context: the order being built, or the price book being edited.
     var priceCtx = o || (state.view === "book-add" && currentBook() ? { jobNumber: currentBook().job_number } : null);
@@ -1109,10 +1109,11 @@
     if (state.view === "book-add") { openBookPriceSheet(currentBook(), it); return; }
     var o = currentOrder();
     var existing = o.lines.filter(function (l) { return l.key === key; })[0];
+    var sameCount = o.lines.filter(function (l) { return (l.itemKey || l.key) === key && !isShop(l); }).length;
     // Required check: if we have this material in a shop, the crew must choose shop or supplier first.
     var matches = shopMatches(it);
     if (matches.length && !existing) { openShopCheckSheet(it, matches); return; }
-    openSupplierQty(it, existing);
+    openSupplierQty(it, existing, false, sameCount);
   }
 
   function itemRef(it) { return { key: it.key, name: it.name, unit: it.unit, category: it.category, model: it.model }; }
@@ -1170,13 +1171,24 @@
     });
   }
 
-  function openSupplierQty(it, existing, checkedShop) {
+  function openSupplierQty(it, existing, checkedShop, sameCount) {
     var key = it.key;
     var qty = existing ? existing.qty : "";
     var p = priceFor(currentOrder(), it);
+    // The same product can go on the order more than once (e.g. separate releases/areas): extra lines get
+    // their own key (item#2, item#3...) and point back at the product with itemKey.
+    function addSeparate(q) {
+      var ord = currentOrder(), pp = priceFor(ord, it), n = 2;
+      while (ord.lines.some(function (x) { return x.key === key + "#" + n; })) n++;
+      ord.lines.push({ key: key + "#" + n, itemKey: key, id: it.id, name: it.name, unit: it.unit, price: pp.price, special: pp.special,
+        book: pp.special ? pp.book : undefined, model: it.model, category: it.category, qty: q, shopChecked: true });
+      putOrder(ord);
+      toast("Added as a separate line: " + fmtQty(q) + " " + it.unit);
+    }
     openQtySheet({
       title: it.name,
-      sub: it.category + (it.model ? " · #" + it.model : ""),
+      sub: it.category + (it.model ? " · #" + it.model : "") + (sameCount > 1 ? " · on this order " + sameCount + " times" : ""),
+      extraLabel: existing ? "Add as separate line" : "", onExtra: addSeparate, extraFresh: true,
       note: p.special ? "Job price " + fmtMoney(p.price) + " / " + it.unit + (p.regular > 0 ? "  (regular " + fmtMoney(p.regular) + ")" : "") : "",
       price: p.price, unit: it.unit, qty: qty, existing: !!existing,
       onSave: function (q) {
@@ -1205,7 +1217,9 @@
       '<div class="chips quick">' + quick.map(function (n) { return '<button type="button" class="chip" data-add="' + n + '">+' + n + "</button>"; }).join("") + "</div>" +
       '<div class="line-total" id="line-total"></div>' +
       '<div class="btn-row">' + (opt.existing ? '<button class="btn danger" id="qty-remove">Remove</button>' : '<button class="btn" data-action="close-sheet">Cancel</button>') +
-      '<button class="btn primary" id="qty-save">' + (opt.saveLabel || (opt.existing ? "Update" : "Add to Order")) + "</button></div>";
+      '<button class="btn primary" id="qty-save">' + (opt.saveLabel || (opt.existing ? "Update" : "Add to Order")) + "</button></div>" +
+      (opt.extraLabel ? '<button class="btn block" id="qty-extra" style="margin-top:10px">' + ICON.plus + esc(opt.extraLabel) + "</button>" +
+        '<p class="hint" style="margin:6px 0 0">Adds this quantity as its own line (e.g. a different area or release); the line above stays as is.</p>' : "");
     openSheet(h, function (sheet) {
       var input = sheet.querySelector("#qty");
       function upd() {
@@ -1233,6 +1247,14 @@
         var bad = opt.validate && opt.validate(+q.toFixed(3));
         if (bad) { input.focus(); toast(bad); return; }
         opt.onSave(+q.toFixed(3));
+        closeSheet();
+        afterChange();
+      });
+      var ex = sheet.querySelector("#qty-extra");
+      if (ex) ex.addEventListener("click", function () {
+        var q = parseFloat(input.value);
+        if (!(q > 0)) { input.focus(); toast("Enter a quantity"); return; }
+        opt.onExtra(+q.toFixed(3));
         closeSheet();
         afterChange();
       });
@@ -2658,6 +2680,12 @@
       h += '<div class="inv-lines">' + rows.map(invRowHtml).join("") + "</div>";
     }
 
+    // price-list check (no order needed)
+    if (inv.status !== "processing" && ((inv.extracted || {}).lines || []).length) {
+      if (!inv.order_id || state.invPLOpen === inv.id) h += priceListHtml(inv);
+      else h += '<button class="btn block" style="margin-top:12px" data-action="inv-pricelist">Check prices against the price list</button>';
+    }
+
     // actions
     if (inv.status !== "processing" || invStalled(inv)) {
       h += '<h3>Review</h3><div class="card"><label class="field"><span>Notes</span><textarea class="input" id="inv-notes" placeholder="Anything to remember about this invoice">' + esc(inv.notes || "") + "</textarea></label>" +
@@ -2674,6 +2702,16 @@
     return h + "</main>";
   };
   AFTER.invoice = function () {
+    // Price-list check: remember the supplier / job # chosen for this invoice and redraw.
+    ["pl-sup", "pl-job"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener("change", function () {
+        var inv = currentInvoice(), m = store.get("invPL", {});
+        m[inv.id] = { supplier: document.getElementById("pl-sup").value, job: document.getElementById("pl-job").value.trim() };
+        store.set("invPL", m);
+        var y = window.scrollY; render(); window.scrollTo(0, y);
+      });
+    });
     var n = document.getElementById("inv-notes");
     if (n) n.addEventListener("change", function () {
       var inv = currentInvoice();
@@ -2703,6 +2741,88 @@
       "<div><small>Order" + (r.job_price ? ' <span class="job-price">Job price</span>' : "") + "</small>" + (r.ord_qty != null ? esc(fmtQty(r.ord_qty)) + " × " : "") + (r.ord_price != null ? fmtMoney(r.ord_price) : "-") + "</div></div>" +
       (r.qty_note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.qty_note) + "</div>" : "") +
       (r.matched_by === "agent" ? '<div class="hint" style="margin:4px 0 0">Matched by the AI from the description</div>' : "") + "</div>";
+  }
+
+  // ---------------------------------------------------------------- price-list check (no order needed)
+  // Compares each billed line with our price list for that supplier (and the job's special pricing when a job # is
+  // known): by item code first, then by description + size. Runs in the app; nothing is sent anywhere.
+  var PL_CHARGE_RE = /\b(sales\s*tax|tax(es)?|freight|fsc|fuel\s*(sur\s*)?charge|surcharge|delivery|shipping|handling|hazmat)\b/i;
+  function plCodeNorm(c) { return String(c || "").toUpperCase().replace(/[\s\-_.\/#]/g, "").replace(/O/g, "0").replace(/I/g, "1"); }
+  function plUnit(u) { u = String(u || "").toUpperCase(); return { FT: "LF", EACH: "EA", GA: "GAL", GL: "GAL", ROLL: "RL", BOX: "BX", SHT: "SH" }[u] || u; }
+  function guessInvoiceJob(inv) {
+    var ex = inv.extracted || {}, order = orderForInvoice(inv);
+    if (order) return order.jobNumber;
+    var refs = [ex.po_number, ex.job_reference].concat(ex.other_references || []).filter(Boolean).join(" ");
+    var m = refs.match(/\b(\d{3,5})(?:-\d{3})?\b/);
+    return m ? m[1] : "";
+  }
+  function priceListCheck(inv, supplier, job) {
+    var ex = inv.extracted || {};
+    var pool = (BY_SUPPLIER[supplier] || []).concat(job ? jobItems(job, supplier) : []);
+    ensureIndex();
+    var byCode = {};
+    pool.forEach(function (it) { var k = plCodeNorm(it.model); if (k.length >= 4 && !byCode[k]) byCode[k] = it; });
+    var ctx = { jobNumber: job || "" };
+    return (ex.lines || []).filter(function (l) { return !PL_CHARGE_RE.test((l.item_code || "") + " " + (l.description || "")) || /\d\s*(x|")\s*\d|#\d/i.test(l.description || ""); })
+      .map(function (l) {
+        var it = byCode[plCodeNorm(l.item_code)] || null, how = it ? "code" : "";
+        if (!it && l.description) {
+          // Description + size: only accept a clear match (same sizes, every word found).
+          var res = S.search(pool, l.description);
+          var d = S.itemDims(l.description);
+          if (!res.partial && res.results.length && d.length) {
+            var c = res.results[0], cd = S.itemDims(c.name);
+            if (cd.length >= d.length && d.every(function (x, i) { return Math.abs(x.v - cd[i].v) < 1e-6; })) { it = c; how = "description"; }
+          }
+        }
+        var row = { line: l, it: it, how: how, list: null, special: false, status: "unknown", diff: null, note: "" };
+        if (!it) return row;
+        var p = priceFor(ctx, it);
+        row.list = p.price; row.special = p.special;
+        if (l.unit_price == null) row.status = "no_price";
+        else if (!(p.price > 0)) row.status = "no_list";
+        else {
+          row.diff = Math.round((l.unit_price - p.price) * 10000) / 10000;
+          row.status = Math.abs(l.unit_price - p.price) > Math.max(0.01, p.price * 0.002) ? "price" : "ok";
+        }
+        if (l.unit && it.unit && plUnit(l.unit) !== plUnit(it.unit)) {
+          row.note = "Units differ: invoice " + l.unit + ", price list " + it.unit + ". Check the price per unit.";
+          if (row.status === "price") row.status = "check";
+        }
+        return row;
+      });
+  }
+  function priceListHtml(inv) {
+    var ex = inv.extracted || {};
+    if (!(ex.lines || []).length) return "";
+    var saved = store.get("invPL", {})[inv.id] || {};
+    var sup = saved.supplier || inv.supplier || "", job = saved.job != null ? saved.job : guessInvoiceJob(inv);
+    var h = '<h3>Price-list check</h3><div class="card"><p class="hint" style="margin-top:0">Compares each billed price with our price list' +
+      (job ? " and Job " + esc(job) + "'s special pricing" : "") + ". No order needed.</p>" +
+      '<div class="filters"><label class="field"><span>Supplier</span><select class="input" id="pl-sup"><option value="">Pick…</option>' +
+      SUPPLIERS.map(function (x) { return "<option" + (x === sup ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field"><span>Job # (for job pricing)</span><input class="input" id="pl-job" value="' + esc(job) + '" placeholder="optional"></label></div>';
+    if (!sup) return h + '<p class="hint">Pick the supplier to check prices.</p></div>';
+    var rows = priceListCheck(inv, sup, job);
+    var bad = rows.filter(function (r) { return r.status === "price"; }), unk = rows.filter(function (r) { return r.status === "unknown"; });
+    var over = bad.reduce(function (a, r) { return a + (r.diff > 0 && r.line.quantity ? r.diff * r.line.quantity : 0); }, 0);
+    h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + " line" + (bad.length === 1 ? "" : "s") + " billed at a different price than " + (job ? "the job / price list" : "the price list") + "</b>" +
+      (over > 0.005 ? "<br>Overbilled by about " + fmtMoney(round2(over)) + " in total." : "") + "</div>"
+      : '<div class="notice ok-notice">Every line found in the price list is billed at the listed price.</div>';
+    if (unk.length) h += '<p class="hint">' + unk.length + " line" + (unk.length === 1 ? " isn't" : "s aren't") + " in our price list for " + esc(sup) + " and couldn't be checked.</p>";
+    h += '<div class="inv-lines">' + rows.map(function (r) {
+      var cls = { ok: "ok", price: "bad", check: "bad", unknown: "info", no_list: "info", no_price: "info" }[r.status];
+      var label = { ok: "Matches list", price: "Price differs", check: "Check units", unknown: "Not in price list", no_list: "No list price", no_price: "No price on invoice" }[r.status];
+      var l = r.line;
+      return '<div class="inv-line ' + cls + '"><div class="il-top"><span class="il-status">' + label + "</span>" +
+        (r.diff && r.status !== "ok" ? '<span class="il-diff ' + (r.diff > 0 ? "neg" : "pos") + '">' + (r.diff > 0 ? "+" : "") + fmtMoney(r.diff) + " / " + esc(l.unit || "") + "</span>" : "") + "</div>" +
+        '<div class="il-name">' + esc(l.description) + (l.item_code ? ' <span class="hint">#' + esc(l.item_code) + "</span>" : "") + "</div>" +
+        '<div class="il-grid"><div><small>Invoice</small>' + (l.quantity != null ? esc(fmtQty(l.quantity)) + " × " : "") + (l.unit_price != null ? fmtMoney(l.unit_price) : "-") + "</div>" +
+        "<div><small>" + (r.special ? '<span class="job-price">Job price</span>' : "Price list") + "</small>" + (r.list != null ? fmtMoney(r.list) + (r.it ? " / " + esc(r.it.unit) : "") : "-") + "</div></div>" +
+        (r.it && r.how === "description" ? '<div class="hint" style="margin:4px 0 0">Matched by description: ' + esc(r.it.name) + "</div>" : "") +
+        (r.note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.note) + "</div>" : "") + "</div>";
+    }).join("") + "</div></div>";
+    return h;
   }
 
   // Send back: email with subject "Incorrect invoice <#>", order PDF + invoice file attached. Only when the reviewer chooses to.
@@ -3096,6 +3216,7 @@
         .then(refreshInvoices).then(function () { toast("Invoice approved"); render(); }, function (e) { toast(e.message); });
     },
     "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
+    "inv-pricelist": function () { state.invPLOpen = currentInvoice().id; render(); },
     "inv-stop": function () {
       var inv = currentInvoice();
       if (!confirm("Cancel this check? You can re-run it or delete the invoice afterwards.")) return;
@@ -3312,7 +3433,7 @@
       var o = currentOrder();
       // Re-price from the current price list where the item still exists.
       var lines = o.lines.map(function (l) {
-        var it = l.key && BY_KEY[l.key];
+        var it = l.key && BY_KEY[l.itemKey || l.key];
         var c = JSON.parse(JSON.stringify(l));
         if (it) c.price = it.price;
         if (c.source === "shop") { c.pulled = false; delete c.pulledBy; delete c.pulledAt; }
