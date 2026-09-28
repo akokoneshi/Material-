@@ -2489,7 +2489,7 @@
     });
   }
   // When the AI service was busy, re-run the check by itself a few minutes later (up to 3 times per invoice).
-  var BUSY_RE = /overloaded|limit was reached|high demand|\b(429|503)\b/i, AUTO_TRIES = 3, AUTO_WAIT = 2 * 60 * 1000;
+  var BUSY_RE = /overloaded|limit was reached|high demand|took too long|\b(429|503|504)\b/i, AUTO_TRIES = 3, AUTO_WAIT = 2 * 60 * 1000;
   // A check that has said "processing" for over 4 minutes was cut off (e.g. the function's time limit).
   function invStalled(inv) { return inv.status === "processing" && Date.now() - new Date(inv.updated_at || inv.created_at).getTime() > 4 * 60 * 1000; }
   function autoRetryInfo(inv) {

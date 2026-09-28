@@ -20,6 +20,9 @@ const USE_GEMINI = !!Deno.env.get("GEMINI_API_KEY");
 const HAS_MISTRAL = !!Deno.env.get("MISTRAL_API_KEY");
 const MISTRAL_OCR_MODEL = Deno.env.get("MISTRAL_OCR_MODEL") || "mistral-ocr-latest";
 const MISTRAL_MODEL = Deno.env.get("MISTRAL_MODEL") || "mistral-small-latest";
+// Per-request time limits keep a whole check inside the function's run time.
+const GEMINI_TIMEOUT_MS = +(Deno.env.get("GEMINI_TIMEOUT_MS") || 40000);
+const MISTRAL_TIMEOUT_MS = +(Deno.env.get("MISTRAL_TIMEOUT_MS") || 60000);
 // "gemini-flash-latest" always points at Google's current Flash model (free tier).
 const MODEL = Deno.env.get("INVOICE_MODEL") || (USE_GEMINI ? "gemini-flash-latest" : "claude-opus-5");
 // Used when the main Gemini model stays overloaded (503) or rate-limited (429) after retries.
@@ -260,7 +263,7 @@ export async function askJSON<T>(input: AskInput, schema: Record<string, unknown
     } catch (e) {
       // Gemini stayed busy / over its free limit: let Mistral do it instead.
       const st = (e as { status?: number })?.status;
-      if (!HAS_MISTRAL || (st !== 503 && st !== 429 && st !== 500 && st !== 404)) throw e;
+      if (!HAS_MISTRAL || (st !== 503 && st !== 429 && st !== 500 && st !== 504 && st !== 404)) throw e;
       console.warn(`Gemini unavailable (${st}); using Mistral`);
       return await askMistral<T>(input, schema);
     }
@@ -273,6 +276,9 @@ export async function askJSON<T>(input: AskInput, schema: Record<string, unknown
 function withStatus(e: unknown): unknown {
   const sc = (e as { statusCode?: number })?.statusCode;
   if (sc && !(e as { status?: number }).status) (e as { status?: number }).status = sc;
+  if (!(e as { status?: number })?.status && /timeout|abort/i.test(String((e as Error)?.name) + " " + String((e as Error)?.message))) {
+    (e as { status?: number }).status = 504;
+  }
   return e;
 }
 
@@ -293,7 +299,7 @@ async function mistralOCR(client: Mistral, file: { mediaType: string; base64: st
 }
 
 async function askMistral<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
-  const client = new Mistral({ apiKey: Deno.env.get("MISTRAL_API_KEY")! });
+  const client = new Mistral({ apiKey: Deno.env.get("MISTRAL_API_KEY")!, timeoutMs: MISTRAL_TIMEOUT_MS });
   const retry = async <R>(fn: () => Promise<R>): Promise<R> => {
     let last: unknown;
     for (const wait of [0, 4000, 10000]) {
@@ -301,7 +307,7 @@ async function askMistral<T>(input: AskInput, schema: Record<string, unknown>): 
       try { return await fn(); } catch (e) {
         last = withStatus(e);
         const st = (last as { status?: number })?.status;
-        if (st !== 429 && st !== 500 && st !== 502 && st !== 503) throw last;
+        if (st !== 429 && st !== 500 && st !== 502 && st !== 503) throw last; // a timeout (504) isn't retried
       }
     }
     throw last;
@@ -333,8 +339,15 @@ async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): P
     model,
     contents: [{ role: "user", parts: withSchema ? parts : parts.slice(0, -1).concat([{ text: input.text + "\n\nRespond with only JSON matching this JSON Schema:\n" + JSON.stringify(schema) }]) }],
     config: withSchema
-      ? { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 32000 }
-      : { responseMimeType: "application/json", maxOutputTokens: 32000 },
+      ? { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 32000, abortSignal: AbortSignal.timeout(GEMINI_TIMEOUT_MS) }
+      : { responseMimeType: "application/json", maxOutputTokens: 32000, abortSignal: AbortSignal.timeout(GEMINI_TIMEOUT_MS) },
+  }).catch((e) => {
+    // A request Gemini never answers counts as "busy" (504) so the backup can take over.
+    const name = (e as { name?: string })?.name || "";
+    if (name === "TimeoutError" || name === "AbortError" || /abort|timed? ?out/i.test(String((e as Error)?.message))) {
+      throw Object.assign(new Error("Gemini took too long to answer"), { status: 504 });
+    }
+    throw e;
   });
   // Busy (503) / rate-limited (429): retry with growing waits, then move on to the next model.
   // A model Google has retired (404) is skipped too.
@@ -352,7 +365,8 @@ async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): P
           last = e;
           const st = (e as { status?: number })?.status;
           if (st === 404) break;
-          if (st !== 503 && st !== 429 && st !== 500) throw e;
+          if (st === 504 && HAS_MISTRAL) throw e; // don't wait out a hung Gemini; Mistral takes over
+          if (st !== 503 && st !== 429 && st !== 500 && st !== 504) throw e;
         }
       }
     }
@@ -487,7 +501,8 @@ async function processInvoice(db: SupabaseClient, id: string, forcedOrderId?: st
   } catch (e) {
     console.error(e);
     const status = (e as { status?: number })?.status;
-    const msg = status === 429 ? "The AI service's free-tier limit was reached. The app will try again in a few minutes."
+    const msg = status === 504 ? "The AI took too long to answer. The app will try again in a few minutes."
+      : status === 429 ? "The AI service's free-tier limit was reached. The app will try again in a few minutes."
       : status === 503 || status === 500 ? "The AI service is overloaded right now (Google's side). The app will try again in a few minutes."
       : status ? `AI service error (${status}): ${(e as Error).message}` : String((e as Error)?.message || e);
     await db.from("invoices").update({ status: "error", error: msg, updated_at: new Date().toISOString() }).eq("id", id);
