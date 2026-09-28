@@ -165,6 +165,9 @@ Who can see invoices: admins, and people given **Can review invoices** in Users 
 1. **SQL Editor:** run [`supabase/invoices.sql`](supabase/invoices.sql). It creates the table, permission, and a private `invoices` storage bucket.
 2. Get an AI key. Either one works:
    - **Gemini (free tier):** aistudio.google.com → Get API key. Add it as the secret `GEMINI_API_KEY`.
+   - **Mistral (free backup, optional):** console.mistral.ai → Experiment plan → API keys. Add it as the secret
+     `MISTRAL_API_KEY`. When Gemini is busy or over its free limit, the agent reads the invoice with Mistral
+     instead (Mistral OCR, then `mistral-small-latest`). The PDF copy sent to Mistral is deleted right after reading.
    - **Claude:** console.anthropic.com → API Keys. Add it as `ANTHROPIC_API_KEY`.
 3. **Edge Functions → Secrets:** add the key. If both are set, Gemini is used.
 4. **Edge Functions → Deploy a new function → Via Editor:** name it **`invoice-agent`**, paste

@@ -9,11 +9,17 @@
 //   GEMINI_API_KEY     Google Gemini (free tier available at aistudio.google.com). Used if set.
 //   ANTHROPIC_API_KEY  Anthropic Claude.
 import Anthropic from "npm:@anthropic-ai/sdk@^0.128.0";
+import { Mistral } from "npm:@mistralai/mistralai@^2.7.0";
 import { GoogleGenAI, FinishReason } from "npm:@google/genai@^2.24.0";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 
 const USE_GEMINI = !!Deno.env.get("GEMINI_API_KEY");
+// Free backup (and the only AI if there is no Gemini key): Mistral reads the PDF with its OCR model,
+// then its small model turns that text into the invoice data.
+const HAS_MISTRAL = !!Deno.env.get("MISTRAL_API_KEY");
+const MISTRAL_OCR_MODEL = Deno.env.get("MISTRAL_OCR_MODEL") || "mistral-ocr-latest";
+const MISTRAL_MODEL = Deno.env.get("MISTRAL_MODEL") || "mistral-small-latest";
 // "gemini-flash-latest" always points at Google's current Flash model (free tier).
 const MODEL = Deno.env.get("INVOICE_MODEL") || (USE_GEMINI ? "gemini-flash-latest" : "claude-opus-5");
 // Used when the main Gemini model stays overloaded (503) or rate-limited (429) after retries.
@@ -248,7 +254,74 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
 type AskInput = { file?: { mediaType: string; base64: string }; text: string };
 
 export async function askJSON<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
-  return USE_GEMINI ? await askGemini<T>(input, schema) : await askClaude<T>(input, schema);
+  if (USE_GEMINI) {
+    try {
+      return await askGemini<T>(input, schema);
+    } catch (e) {
+      // Gemini stayed busy / over its free limit: let Mistral do it instead.
+      const st = (e as { status?: number })?.status;
+      if (!HAS_MISTRAL || (st !== 503 && st !== 429 && st !== 500 && st !== 404)) throw e;
+      console.warn(`Gemini unavailable (${st}); using Mistral`);
+      return await askMistral<T>(input, schema);
+    }
+  }
+  if (HAS_MISTRAL && !Deno.env.get("ANTHROPIC_API_KEY")) return await askMistral<T>(input, schema);
+  return await askClaude<T>(input, schema);
+}
+
+// Mistral errors carry statusCode; the rest of this file looks at status.
+function withStatus(e: unknown): unknown {
+  const sc = (e as { statusCode?: number })?.statusCode;
+  if (sc && !(e as { status?: number }).status) (e as { status?: number }).status = sc;
+  return e;
+}
+
+async function mistralOCR(client: Mistral, file: { mediaType: string; base64: string }): Promise<string> {
+  if (file.mediaType.startsWith("image/")) {
+    const res = await client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "image_url", imageUrl: `data:${file.mediaType};base64,${file.base64}` } });
+    return res.pages.map((p) => p.markdown).join("\n\n");
+  }
+  // PDFs: upload, read, then delete the copy on Mistral's side right away.
+  const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+  const up = await client.files.upload({ file: { fileName: "invoice.pdf", content: bytes }, purpose: "ocr" });
+  try {
+    const res = await client.ocr.process({ model: MISTRAL_OCR_MODEL, document: { type: "file", fileId: up.id } });
+    return res.pages.map((p, i) => `--- Page ${i + 1} ---\n${p.markdown}`).join("\n\n");
+  } finally {
+    await client.files.delete({ fileId: up.id }).catch(() => {});
+  }
+}
+
+async function askMistral<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
+  const client = new Mistral({ apiKey: Deno.env.get("MISTRAL_API_KEY")! });
+  const retry = async <R>(fn: () => Promise<R>): Promise<R> => {
+    let last: unknown;
+    for (const wait of [0, 4000, 10000]) {
+      if (wait) await sleep(wait);
+      try { return await fn(); } catch (e) {
+        last = withStatus(e);
+        const st = (last as { status?: number })?.status;
+        if (st !== 429 && st !== 500 && st !== 502 && st !== 503) throw last;
+      }
+    }
+    throw last;
+  };
+  let text = input.text;
+  if (input.file) {
+    const ocr = await retry(() => mistralOCR(client, input.file!));
+    if (!ocr.trim()) throw new Error("The AI couldn't find any text in this file.");
+    text += "\n\nThe invoice, converted to text (tables in markdown):\n\n" + ocr;
+  }
+  const res = await retry(() => client.chat.complete({
+    model: MISTRAL_MODEL,
+    temperature: 0,
+    responseFormat: { type: "json_object" },
+    messages: [{ role: "user", content: text + "\n\nRespond with only JSON matching this JSON Schema:\n" + JSON.stringify(schema) }],
+  }));
+  const content = res.choices?.[0]?.message?.content;
+  const out = typeof content === "string" ? content : (content || []).map((c) => ("text" in c ? c.text : "")).join("");
+  if (!out) throw new Error("The AI returned no result.");
+  return JSON.parse(out) as T;
 }
 
 async function askGemini<T>(input: AskInput, schema: Record<string, unknown>): Promise<T> {
@@ -428,7 +501,7 @@ Deno.serve(async (req) => {
     let key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     if (!key) { try { key = (Object.values(JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}"))[0] as string) || ""; } catch { /* ignore */ } }
     if (!key) return reply({ error: "Function has no service key available" }, 500);
-    if (!Deno.env.get("GEMINI_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) return reply({ error: "Add a GEMINI_API_KEY (or ANTHROPIC_API_KEY) secret for this function" }, 500);
+    if (!Deno.env.get("GEMINI_API_KEY") && !Deno.env.get("MISTRAL_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) return reply({ error: "Add a GEMINI_API_KEY (or MISTRAL_API_KEY) secret for this function" }, 500);
     const db = createClient(url, key);
 
     const token = (req.headers.get("Authorization") || "").replace(/^Bearer /i, "");
