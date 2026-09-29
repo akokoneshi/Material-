@@ -106,7 +106,9 @@ own part numbers, taken from a GIC quote) every time the price list is rebuilt. 
 
 `data/source/supplier_prices/*.csv` (supplier, model, price) sets a supplier's **day-to-day prices** from their price book,
 matched by part number. Files apply in name order, so name them `<supplier>_<date>.csv` and the newest wins. Currently:
-CT-Homans from the *Mechanical Insulation Pricebook 8.11.26* (713 part numbers; "Call" items keep the old price).
+CT-Homans from the *Mechanical Insulation Pricebook 8.11.26* (713 part numbers; "Call" items keep the old price),
+then the *8/20/26 price changes* on top (PVC fitting covers, grooved and coupling covers, line flange covers and PVC jacketing;
+each 8/20 price is applied to both the Proto `PR…` item and the matching Zeston `JM…` item).
 To load a new book, replace or add the CSV and rebuild. Job special pricing still overrides these on its jobs.
 
 **Admins can also edit single products in the app:** Settings (or home) → **Edit Products**, or **Edit product** on an

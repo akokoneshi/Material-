@@ -1,0 +1,337 @@
+supplier,model,price,source
+CT-Homans,PR0290,1.10,Homans 8/20/26 price changes (Fitting #2 - 90° fitting cover)
+CT-Homans,JM0290,1.10,Homans 8/20/26 price changes: same product as PR0290 (Fitting #2 - 90° fitting cover)
+CT-Homans,PR0245,1.10,Homans 8/20/26 price changes (Fitting #2 - 45° fitting cover)
+CT-Homans,JM0245,1.10,Homans 8/20/26 price changes: same product as PR0245 (Fitting #2 - 45° fitting cover)
+CT-Homans,PR02T,2.00,Homans 8/20/26 price changes (Fitting #2 - Tee cover)
+CT-Homans,JM02T,2.00,Homans 8/20/26 price changes: same product as PR02T (Fitting #2 - Tee cover)
+CT-Homans,PR02EC,0.40,Homans 8/20/26 price changes (Fitting #2 - End cap)
+CT-Homans,JM2EC,0.40,Homans 8/20/26 price changes: same product as PR02EC (Fitting #2 - End cap)
+CT-Homans,PR0390,1.30,Homans 8/20/26 price changes (Fitting #3 - 90° fitting cover)
+CT-Homans,JM0390,1.30,Homans 8/20/26 price changes: same product as PR0390 (Fitting #3 - 90° fitting cover)
+CT-Homans,PR0345,1.30,Homans 8/20/26 price changes (Fitting #3 - 45° fitting cover)
+CT-Homans,JM0345,1.30,Homans 8/20/26 price changes: same product as PR0345 (Fitting #3 - 45° fitting cover)
+CT-Homans,PR03T,2.20,Homans 8/20/26 price changes (Fitting #3 - Tee cover)
+CT-Homans,JM03T,2.20,Homans 8/20/26 price changes: same product as PR03T (Fitting #3 - Tee cover)
+CT-Homans,PR03EC,0.40,Homans 8/20/26 price changes (Fitting #3 - End cap)
+CT-Homans,JM03EC,0.40,Homans 8/20/26 price changes: same product as PR03EC (Fitting #3 - End cap)
+CT-Homans,PR0490,1.40,Homans 8/20/26 price changes (Fitting #4 - 90° fitting cover)
+CT-Homans,JM0490,1.40,Homans 8/20/26 price changes: same product as PR0490 (Fitting #4 - 90° fitting cover)
+CT-Homans,PR0445,1.40,Homans 8/20/26 price changes (Fitting #4 - 45° fitting cover)
+CT-Homans,JM0445,1.40,Homans 8/20/26 price changes: same product as PR0445 (Fitting #4 - 45° fitting cover)
+CT-Homans,PR04T,2.40,Homans 8/20/26 price changes (Fitting #4 - Tee cover)
+CT-Homans,JM04T,2.40,Homans 8/20/26 price changes: same product as PR04T (Fitting #4 - Tee cover)
+CT-Homans,PR04EC,0.60,Homans 8/20/26 price changes (Fitting #4 - End cap)
+CT-Homans,JM04EC,0.60,Homans 8/20/26 price changes: same product as PR04EC (Fitting #4 - End cap)
+CT-Homans,PR0590,1.60,Homans 8/20/26 price changes (Fitting #5 - 90° fitting cover)
+CT-Homans,JM0590,1.60,Homans 8/20/26 price changes: same product as PR0590 (Fitting #5 - 90° fitting cover)
+CT-Homans,PR0545,1.60,Homans 8/20/26 price changes (Fitting #5 - 45° fitting cover)
+CT-Homans,JM0545,1.60,Homans 8/20/26 price changes: same product as PR0545 (Fitting #5 - 45° fitting cover)
+CT-Homans,PR05T,2.60,Homans 8/20/26 price changes (Fitting #5 - Tee cover)
+CT-Homans,JM05T,2.60,Homans 8/20/26 price changes: same product as PR05T (Fitting #5 - Tee cover)
+CT-Homans,PR05EC,0.70,Homans 8/20/26 price changes (Fitting #5 - End cap)
+CT-Homans,JM05EC,0.70,Homans 8/20/26 price changes: same product as PR05EC (Fitting #5 - End cap)
+CT-Homans,PR0690,1.70,Homans 8/20/26 price changes (Fitting #6 - 90° fitting cover)
+CT-Homans,JM0690,1.70,Homans 8/20/26 price changes: same product as PR0690 (Fitting #6 - 90° fitting cover)
+CT-Homans,PR0645,1.70,Homans 8/20/26 price changes (Fitting #6 - 45° fitting cover)
+CT-Homans,JM0645,1.70,Homans 8/20/26 price changes: same product as PR0645 (Fitting #6 - 45° fitting cover)
+CT-Homans,PR06T,2.90,Homans 8/20/26 price changes (Fitting #6 - Tee cover)
+CT-Homans,JM06T,2.90,Homans 8/20/26 price changes: same product as PR06T (Fitting #6 - Tee cover)
+CT-Homans,PR06EC,0.90,Homans 8/20/26 price changes (Fitting #6 - End cap)
+CT-Homans,JM06EC,0.90,Homans 8/20/26 price changes: same product as PR06EC (Fitting #6 - End cap)
+CT-Homans,PR0790,1.80,Homans 8/20/26 price changes (Fitting #7 - 90° fitting cover)
+CT-Homans,JM0790,1.80,Homans 8/20/26 price changes: same product as PR0790 (Fitting #7 - 90° fitting cover)
+CT-Homans,PR0745,1.80,Homans 8/20/26 price changes (Fitting #7 - 45° fitting cover)
+CT-Homans,JM0745,1.80,Homans 8/20/26 price changes: same product as PR0745 (Fitting #7 - 45° fitting cover)
+CT-Homans,PR07T,3.10,Homans 8/20/26 price changes (Fitting #7 - Tee cover)
+CT-Homans,JM07T,3.10,Homans 8/20/26 price changes: same product as PR07T (Fitting #7 - Tee cover)
+CT-Homans,PR07EC,1.10,Homans 8/20/26 price changes (Fitting #7 - End cap)
+CT-Homans,JM07EC,1.10,Homans 8/20/26 price changes: same product as PR07EC (Fitting #7 - End cap)
+CT-Homans,PR08T,3.60,Homans 8/20/26 price changes (Fitting #8 - Tee cover)
+CT-Homans,JM08T,3.60,Homans 8/20/26 price changes: same product as PR08T (Fitting #8 - Tee cover)
+CT-Homans,PR08EC,1.30,Homans 8/20/26 price changes (Fitting #8 - End cap)
+CT-Homans,JM08EC,1.30,Homans 8/20/26 price changes: same product as PR08EC (Fitting #8 - End cap)
+CT-Homans,PR0990,2.30,Homans 8/20/26 price changes (Fitting #9 - 90° fitting cover)
+CT-Homans,JM0990,2.30,Homans 8/20/26 price changes: same product as PR0990 (Fitting #9 - 90° fitting cover)
+CT-Homans,PR0945,2.30,Homans 8/20/26 price changes (Fitting #9 - 45° fitting cover)
+CT-Homans,JM0945,2.30,Homans 8/20/26 price changes: same product as PR0945 (Fitting #9 - 45° fitting cover)
+CT-Homans,PR09T,4.00,Homans 8/20/26 price changes (Fitting #9 - Tee cover)
+CT-Homans,JM09T,4.00,Homans 8/20/26 price changes: same product as PR09T (Fitting #9 - Tee cover)
+CT-Homans,PR09EC,1.40,Homans 8/20/26 price changes (Fitting #9 - End cap)
+CT-Homans,JM09EC,1.40,Homans 8/20/26 price changes: same product as PR09EC (Fitting #9 - End cap)
+CT-Homans,PR1090,2.90,Homans 8/20/26 price changes (Fitting #10 - 90° fitting cover)
+CT-Homans,JM1090,2.90,Homans 8/20/26 price changes: same product as PR1090 (Fitting #10 - 90° fitting cover)
+CT-Homans,PR1045,2.90,Homans 8/20/26 price changes (Fitting #10 - 45° fitting cover)
+CT-Homans,JM1045,2.90,Homans 8/20/26 price changes: same product as PR1045 (Fitting #10 - 45° fitting cover)
+CT-Homans,PR10T,4.80,Homans 8/20/26 price changes (Fitting #10 - Tee cover)
+CT-Homans,JM10T,4.80,Homans 8/20/26 price changes: same product as PR10T (Fitting #10 - Tee cover)
+CT-Homans,PR10EC,1.60,Homans 8/20/26 price changes (Fitting #10 - End cap)
+CT-Homans,JM10EC,1.60,Homans 8/20/26 price changes: same product as PR10EC (Fitting #10 - End cap)
+CT-Homans,PR1190,3.40,Homans 8/20/26 price changes (Fitting #11 - 90° fitting cover)
+CT-Homans,JM1190,3.40,Homans 8/20/26 price changes: same product as PR1190 (Fitting #11 - 90° fitting cover)
+CT-Homans,PR1145,3.40,Homans 8/20/26 price changes (Fitting #11 - 45° fitting cover)
+CT-Homans,JM1145,3.40,Homans 8/20/26 price changes: same product as PR1145 (Fitting #11 - 45° fitting cover)
+CT-Homans,PR11T,5.90,Homans 8/20/26 price changes (Fitting #11 - Tee cover)
+CT-Homans,JM11T,5.90,Homans 8/20/26 price changes: same product as PR11T (Fitting #11 - Tee cover)
+CT-Homans,PR11EC,1.80,Homans 8/20/26 price changes (Fitting #11 - End cap)
+CT-Homans,JM11EC,1.80,Homans 8/20/26 price changes: same product as PR11EC (Fitting #11 - End cap)
+CT-Homans,PR1290,4.00,Homans 8/20/26 price changes (Fitting #12 - 90° fitting cover)
+CT-Homans,JM1290,4.00,Homans 8/20/26 price changes: same product as PR1290 (Fitting #12 - 90° fitting cover)
+CT-Homans,PR1245,4.00,Homans 8/20/26 price changes (Fitting #12 - 45° fitting cover)
+CT-Homans,JM1245,4.00,Homans 8/20/26 price changes: same product as PR1245 (Fitting #12 - 45° fitting cover)
+CT-Homans,PR12T,7.10,Homans 8/20/26 price changes (Fitting #12 - Tee cover)
+CT-Homans,JM12T,7.10,Homans 8/20/26 price changes: same product as PR12T (Fitting #12 - Tee cover)
+CT-Homans,PR12EC,1.90,Homans 8/20/26 price changes (Fitting #12 - End cap)
+CT-Homans,JM12EC,1.90,Homans 8/20/26 price changes: same product as PR12EC (Fitting #12 - End cap)
+CT-Homans,PR1390,5.30,Homans 8/20/26 price changes (Fitting #13 - 90° fitting cover)
+CT-Homans,JM1390,5.30,Homans 8/20/26 price changes: same product as PR1390 (Fitting #13 - 90° fitting cover)
+CT-Homans,PR1345,5.30,Homans 8/20/26 price changes (Fitting #13 - 45° fitting cover)
+CT-Homans,JM1345,5.30,Homans 8/20/26 price changes: same product as PR1345 (Fitting #13 - 45° fitting cover)
+CT-Homans,PR13T,9.40,Homans 8/20/26 price changes (Fitting #13 - Tee cover)
+CT-Homans,JM13T,9.40,Homans 8/20/26 price changes: same product as PR13T (Fitting #13 - Tee cover)
+CT-Homans,PR1590,9.20,Homans 8/20/26 price changes (Fitting #15 - 90° fitting cover)
+CT-Homans,JM1590,9.20,Homans 8/20/26 price changes: same product as PR1590 (Fitting #15 - 90° fitting cover)
+CT-Homans,PR1545,9.20,Homans 8/20/26 price changes (Fitting #15 - 45° fitting cover)
+CT-Homans,JM1545,9.20,Homans 8/20/26 price changes: same product as PR1545 (Fitting #15 - 45° fitting cover)
+CT-Homans,PR15T,15.30,Homans 8/20/26 price changes (Fitting #15 - Tee cover)
+CT-Homans,JM15T,15.30,Homans 8/20/26 price changes: same product as PR15T (Fitting #15 - Tee cover)
+CT-Homans,PR1790,12.10,Homans 8/20/26 price changes (Fitting #17 - 90° fitting cover)
+CT-Homans,JM1790,12.10,Homans 8/20/26 price changes: same product as PR1790 (Fitting #17 - 90° fitting cover)
+CT-Homans,PR1745,12.10,Homans 8/20/26 price changes (Fitting #17 - 45° fitting cover)
+CT-Homans,JM1745,12.10,Homans 8/20/26 price changes: same product as PR1745 (Fitting #17 - 45° fitting cover)
+CT-Homans,PR17T,27.00,Homans 8/20/26 price changes (Fitting #17 - Tee cover)
+CT-Homans,JM17T,27.00,Homans 8/20/26 price changes: same product as PR17T (Fitting #17 - Tee cover)
+CT-Homans,PR17EC,6.30,Homans 8/20/26 price changes (Fitting #17 - End cap)
+CT-Homans,JM17EC,6.30,Homans 8/20/26 price changes: same product as PR17EC (Fitting #17 - End cap)
+CT-Homans,PR1890,15.60,Homans 8/20/26 price changes (Fitting #18 - 90° fitting cover)
+CT-Homans,JM1890,15.60,Homans 8/20/26 price changes: same product as PR1890 (Fitting #18 - 90° fitting cover)
+CT-Homans,PR1845,15.60,Homans 8/20/26 price changes (Fitting #18 - 45° fitting cover)
+CT-Homans,JM1845,15.60,Homans 8/20/26 price changes: same product as PR1845 (Fitting #18 - 45° fitting cover)
+CT-Homans,PR18T,32.90,Homans 8/20/26 price changes (Fitting #18 - Tee cover)
+CT-Homans,JM18T,32.90,Homans 8/20/26 price changes: same product as PR18T (Fitting #18 - Tee cover)
+CT-Homans,PR18EC,7.30,Homans 8/20/26 price changes (Fitting #18 - End cap)
+CT-Homans,JM18EC,7.30,Homans 8/20/26 price changes: same product as PR18EC (Fitting #18 - End cap)
+CT-Homans,PR1990,20.80,Homans 8/20/26 price changes (Fitting #19 - 90° fitting cover)
+CT-Homans,JM1990,20.80,Homans 8/20/26 price changes: same product as PR1990 (Fitting #19 - 90° fitting cover)
+CT-Homans,PR1945,20.80,Homans 8/20/26 price changes (Fitting #19 - 45° fitting cover)
+CT-Homans,JM1945,20.80,Homans 8/20/26 price changes: same product as PR1945 (Fitting #19 - 45° fitting cover)
+CT-Homans,PR19EC,8.20,Homans 8/20/26 price changes (Fitting #19 - End cap)
+CT-Homans,JM19EC,8.20,Homans 8/20/26 price changes: same product as PR19EC (Fitting #19 - End cap)
+CT-Homans,PR2090,28.10,Homans 8/20/26 price changes (Fitting #20 - 90° fitting cover)
+CT-Homans,JM2090,28.10,Homans 8/20/26 price changes: same product as PR2090 (Fitting #20 - 90° fitting cover)
+CT-Homans,PR2045,25.50,Homans 8/20/26 price changes (Fitting #20 - 45° fitting cover)
+CT-Homans,JM2045,25.50,Homans 8/20/26 price changes: same product as PR2045 (Fitting #20 - 45° fitting cover)
+CT-Homans,PR20T,43.60,Homans 8/20/26 price changes (Fitting #20 - Tee cover)
+CT-Homans,JM20T,43.60,Homans 8/20/26 price changes: same product as PR20T (Fitting #20 - Tee cover)
+CT-Homans,PR2190,32.00,Homans 8/20/26 price changes (Fitting #21 - 90° fitting cover)
+CT-Homans,JM2190,32.00,Homans 8/20/26 price changes: same product as PR2190 (Fitting #21 - 90° fitting cover)
+CT-Homans,PR2145,28.10,Homans 8/20/26 price changes (Fitting #21 - 45° fitting cover)
+CT-Homans,JM2145,28.10,Homans 8/20/26 price changes: same product as PR2145 (Fitting #21 - 45° fitting cover)
+CT-Homans,PR21T,48.40,Homans 8/20/26 price changes (Fitting #21 - Tee cover)
+CT-Homans,JM21T,48.40,Homans 8/20/26 price changes: same product as PR21T (Fitting #21 - Tee cover)
+CT-Homans,PR21EC,10.70,Homans 8/20/26 price changes (Fitting #21 - End cap)
+CT-Homans,JM21EC,10.70,Homans 8/20/26 price changes: same product as PR21EC (Fitting #21 - End cap)
+CT-Homans,PR2245,31.30,Homans 8/20/26 price changes (Fitting #22 - 45° fitting cover)
+CT-Homans,JM2245,31.30,Homans 8/20/26 price changes: same product as PR2245 (Fitting #22 - 45° fitting cover)
+CT-Homans,PR22T,53.20,Homans 8/20/26 price changes (Fitting #22 - Tee cover)
+CT-Homans,JM22T,53.20,Homans 8/20/26 price changes: same product as PR22T (Fitting #22 - Tee cover)
+CT-Homans,PR22EC,11.30,Homans 8/20/26 price changes (Fitting #22 - End cap)
+CT-Homans,JM22EC,11.30,Homans 8/20/26 price changes: same product as PR22EC (Fitting #22 - End cap)
+CT-Homans,PR2345,35.60,Homans 8/20/26 price changes (Fitting #23 - 45° fitting cover)
+CT-Homans,JM2345,35.60,Homans 8/20/26 price changes: same product as PR2345 (Fitting #23 - 45° fitting cover)
+CT-Homans,PR23T,58.10,Homans 8/20/26 price changes (Fitting #23 - Tee cover)
+CT-Homans,JM23T,58.10,Homans 8/20/26 price changes: same product as PR23T (Fitting #23 - Tee cover)
+CT-Homans,PR2490,50.00,Homans 8/20/26 price changes (Fitting #24 - 90° fitting cover)
+CT-Homans,JM2490,50.00,Homans 8/20/26 price changes: same product as PR2490 (Fitting #24 - 90° fitting cover)
+CT-Homans,PR2445,38.40,Homans 8/20/26 price changes (Fitting #24 - 45° fitting cover)
+CT-Homans,JM2445,38.40,Homans 8/20/26 price changes: same product as PR2445 (Fitting #24 - 45° fitting cover)
+CT-Homans,PR24T,62.90,Homans 8/20/26 price changes (Fitting #24 - Tee cover)
+CT-Homans,JM24T,62.90,Homans 8/20/26 price changes: same product as PR24T (Fitting #24 - Tee cover)
+CT-Homans,PR24EC,14.30,Homans 8/20/26 price changes (Fitting #24 - End cap)
+CT-Homans,JM24EC,14.30,Homans 8/20/26 price changes: same product as PR24EC (Fitting #24 - End cap)
+CT-Homans,PR25T,67.80,Homans 8/20/26 price changes (Fitting #25 - Tee cover)
+CT-Homans,JM25T,67.80,Homans 8/20/26 price changes: same product as PR25T (Fitting #25 - Tee cover)
+CT-Homans,PR25EC,15.60,Homans 8/20/26 price changes (Fitting #25 - End cap)
+CT-Homans,JM25EC,15.60,Homans 8/20/26 price changes: same product as PR25EC (Fitting #25 - End cap)
+CT-Homans,PR2645,49.40,Homans 8/20/26 price changes (Fitting #26 - 45° fitting cover)
+CT-Homans,JM2645,49.40,Homans 8/20/26 price changes: same product as PR2645 (Fitting #26 - 45° fitting cover)
+CT-Homans,PR26T,72.60,Homans 8/20/26 price changes (Fitting #26 - Tee cover)
+CT-Homans,JM26T,72.60,Homans 8/20/26 price changes: same product as PR26T (Fitting #26 - Tee cover)
+CT-Homans,PR2745,60.30,Homans 8/20/26 price changes (Fitting #27 - 45° fitting cover)
+CT-Homans,JM2745,60.30,Homans 8/20/26 price changes: same product as PR2745 (Fitting #27 - 45° fitting cover)
+CT-Homans,PR27T,79.80,Homans 8/20/26 price changes (Fitting #27 - Tee cover)
+CT-Homans,JM27T,79.80,Homans 8/20/26 price changes: same product as PR27T (Fitting #27 - Tee cover)
+CT-Homans,PR27EC,20.60,Homans 8/20/26 price changes (Fitting #27 - End cap)
+CT-Homans,JM27EC,20.60,Homans 8/20/26 price changes: same product as PR27EC (Fitting #27 - End cap)
+CT-Homans,PR2890,105.80,Homans 8/20/26 price changes (Fitting #28 - 90° fitting cover)
+CT-Homans,JM2890,105.80,Homans 8/20/26 price changes: same product as PR2890 (Fitting #28 - 90° fitting cover)
+CT-Homans,PR2845,82.20,Homans 8/20/26 price changes (Fitting #28 - 45° fitting cover)
+CT-Homans,JM2845,82.20,Homans 8/20/26 price changes: same product as PR2845 (Fitting #28 - 45° fitting cover)
+CT-Homans,PR28T,87.10,Homans 8/20/26 price changes (Fitting #28 - Tee cover)
+CT-Homans,JM28T,87.10,Homans 8/20/26 price changes: same product as PR28T (Fitting #28 - Tee cover)
+CT-Homans,PR28EC,24.60,Homans 8/20/26 price changes (Fitting #28 - End cap)
+CT-Homans,JM28EC,24.60,Homans 8/20/26 price changes: same product as PR28EC (Fitting #28 - End cap)
+CT-Homans,PR29EC,26.40,Homans 8/20/26 price changes (Fitting #29 - End cap)
+CT-Homans,JM29EC,26.40,Homans 8/20/26 price changes: same product as PR29EC (Fitting #29 - End cap)
+CT-Homans,PR31LR90,5.80,"Homans 8/20/26 price changes (3"" pipe x 1"" wall)"
+CT-Homans,JM31LR90,5.80,"Homans 8/20/26 price changes: same product as PR31LR90 (3"" pipe x 1"" wall)"
+CT-Homans,PR3112LR90,9.70,"Homans 8/20/26 price changes (3"" pipe x 1-1/2"" wall)"
+CT-Homans,JM3112LR90,9.70,"Homans 8/20/26 price changes: same product as PR3112LR90 (3"" pipe x 1-1/2"" wall)"
+CT-Homans,PR32LR90,12.50,"Homans 8/20/26 price changes (3"" pipe x 2"" wall)"
+CT-Homans,JM32LR90,12.50,"Homans 8/20/26 price changes: same product as PR32LR90 (3"" pipe x 2"" wall)"
+CT-Homans,PR4112LR90,12.90,"Homans 8/20/26 price changes (4"" pipe x 1-1/2"" wall)"
+CT-Homans,JM4112LR90,12.90,"Homans 8/20/26 price changes: same product as PR4112LR90 (4"" pipe x 1-1/2"" wall)"
+CT-Homans,PR42LR90,17.90,"Homans 8/20/26 price changes (4"" pipe x 2"" wall)"
+CT-Homans,JM42LR90,17.90,"Homans 8/20/26 price changes: same product as PR42LR90 (4"" pipe x 2"" wall)"
+CT-Homans,pR51LR90,11.80,"Homans 8/20/26 price changes (5"" pipe x 1"" wall)"
+CT-Homans,JM51LR90,11.80,"Homans 8/20/26 price changes: same product as PR51LR90 (5"" pipe x 1"" wall)"
+CT-Homans,PR5112LR90,16.10,"Homans 8/20/26 price changes (5"" pipe x 1-1/2"" wall)"
+CT-Homans,JM5112LR90,16.10,"Homans 8/20/26 price changes: same product as PR5112LR90 (5"" pipe x 1-1/2"" wall)"
+CT-Homans,PR52LR90,22.40,"Homans 8/20/26 price changes (5"" pipe x 2"" wall)"
+CT-Homans,JM52LR90,22.40,"Homans 8/20/26 price changes: same product as PR52LR90 (5"" pipe x 2"" wall)"
+CT-Homans,PR61LR90,17.90,"Homans 8/20/26 price changes (6"" pipe x 1"" wall)"
+CT-Homans,JM61LR90,17.90,"Homans 8/20/26 price changes: same product as PR61LR90 (6"" pipe x 1"" wall)"
+CT-Homans,pR6112LR90,21.20,"Homans 8/20/26 price changes (6"" pipe x 1-1/2"" wall)"
+CT-Homans,JM6112LR90,21.20,"Homans 8/20/26 price changes: same product as PR6112LR90 (6"" pipe x 1-1/2"" wall)"
+CT-Homans,PR62LR90,30.70,"Homans 8/20/26 price changes (6"" pipe x 2"" wall)"
+CT-Homans,JM62LR90,30.70,"Homans 8/20/26 price changes: same product as PR62LR90 (6"" pipe x 2"" wall)"
+CT-Homans,PR81LR90,25.80,"Homans 8/20/26 price changes (8"" pipe x 1"" wall)"
+CT-Homans,JM81LR90,25.80,"Homans 8/20/26 price changes: same product as PR81LR90 (8"" pipe x 1"" wall)"
+CT-Homans,PR8112LR90,28.30,"Homans 8/20/26 price changes (8"" pipe x 1-1/2"" wall)"
+CT-Homans,JM8112LR90,28.30,"Homans 8/20/26 price changes: same product as PR8112LR90 (8"" pipe x 1-1/2"" wall)"
+CT-Homans,PR82LR90,40.30,"Homans 8/20/26 price changes (8"" pipe x 2"" wall)"
+CT-Homans,JM82LR90,40.30,"Homans 8/20/26 price changes: same product as PR82LR90 (8"" pipe x 2"" wall)"
+CT-Homans,PR101LR90,30.90,"Homans 8/20/26 price changes (10"" pipe x 1"" wall)"
+CT-Homans,JM101LR90,30.90,"Homans 8/20/26 price changes: same product as PR101LR90 (10"" pipe x 1"" wall)"
+CT-Homans,PR10112LR90,41.20,"Homans 8/20/26 price changes (10"" pipe x 1-1/2"" wall)"
+CT-Homans,JM10112LR90,41.20,"Homans 8/20/26 price changes: same product as PR10112LR90 (10"" pipe x 1-1/2"" wall)"
+CT-Homans,PR102LR90,47.10,"Homans 8/20/26 price changes (10"" pipe x 2"" wall)"
+CT-Homans,JM102LR90,47.10,"Homans 8/20/26 price changes: same product as PR102LR90 (10"" pipe x 2"" wall)"
+CT-Homans,PR123LR90,78.60,"Homans 8/20/26 price changes (12"" pipe x 3"" wall)"
+CT-Homans,JM123LR90,78.60,"Homans 8/20/26 price changes: same product as PR123LR90 (12"" pipe x 3"" wall)"
+CT-Homans,PR121LR90,41.20,"Homans 8/20/26 price changes (12"" pipe x 1"" wall)"
+CT-Homans,JM121LR90,41.20,"Homans 8/20/26 price changes: same product as PR121LR90 (12"" pipe x 1"" wall)"
+CT-Homans,PR12112LR90,54.10,"Homans 8/20/26 price changes (12"" pipe x 1-1/2"" wall)"
+CT-Homans,JM12112LR90,54.10,"Homans 8/20/26 price changes: same product as PR12112LR90 (12"" pipe x 1-1/2"" wall)"
+CT-Homans,PR122LR90,64.50,"Homans 8/20/26 price changes (12"" pipe x 2"" wall)"
+CT-Homans,JM122LR90,64.50,"Homans 8/20/26 price changes: same product as PR122LR90 (12"" pipe x 2"" wall)"
+CT-Homans,PR14112LR90,74.70,"Homans 8/20/26 price changes (14"" pipe x 1-1/2"" wall)"
+CT-Homans,JM14112LR90,74.70,"Homans 8/20/26 price changes: same product as PR14112LR90 (14"" pipe x 1-1/2"" wall)"
+CT-Homans,PR142LR90,86.00,"Homans 8/20/26 price changes (14"" pipe x 2"" wall)"
+CT-Homans,JM142LR90,86.00,"Homans 8/20/26 price changes: same product as PR142LR90 (14"" pipe x 2"" wall)"
+CT-Homans,PR2V90,15.90,"Homans 8/20/26 price changes (2"" - 90°)"
+CT-Homans,JM2V90,15.90,"Homans 8/20/26 price changes: same product as PR2V90 (2"" - 90°)"
+CT-Homans,PR2V45,14.20,"Homans 8/20/26 price changes (2"" - 45°)"
+CT-Homans,JM2V45,14.20,"Homans 8/20/26 price changes: same product as PR2V45 (2"" - 45°)"
+CT-Homans,PR2VT,20.70,"Homans 8/20/26 price changes (2"" - Tee)"
+CT-Homans,JM2VT,20.70,"Homans 8/20/26 price changes: same product as PR2VT (2"" - Tee)"
+CT-Homans,PR3V90,19.80,"Homans 8/20/26 price changes (3"" - 90°)"
+CT-Homans,JM3V90,19.80,"Homans 8/20/26 price changes: same product as PR3V90 (3"" - 90°)"
+CT-Homans,PR3V45,17.70,"Homans 8/20/26 price changes (3"" - 45°)"
+CT-Homans,JM3V45,17.70,"Homans 8/20/26 price changes: same product as PR3V45 (3"" - 45°)"
+CT-Homans,PR3VT,25.70,"Homans 8/20/26 price changes (3"" - Tee)"
+CT-Homans,JM3VT,25.70,"Homans 8/20/26 price changes: same product as PR3VT (3"" - Tee)"
+CT-Homans,PR13MLC,11.40,Homans 8/20/26 price changes (G 13)
+CT-Homans,JM13MLC,11.40,Homans 8/20/26 price changes: same product as PR13MLC (G 13)
+CT-Homans,PR35V90,22.90,"Homans 8/20/26 price changes (3-1/2"" - 90°)"
+CT-Homans,JM35V90,22.90,"Homans 8/20/26 price changes: same product as PR35V90 (3-1/2"" - 90°)"
+CT-Homans,PR35V45,18.60,"Homans 8/20/26 price changes (3-1/2"" - 45°)"
+CT-Homans,JM35V45,18.60,"Homans 8/20/26 price changes: same product as PR35V45 (3-1/2"" - 45°)"
+CT-Homans,PR35VT,27.20,"Homans 8/20/26 price changes (3-1/2"" - Tee)"
+CT-Homans,JM35VT,27.20,"Homans 8/20/26 price changes: same product as PR35VT (3-1/2"" - Tee)"
+CT-Homans,JM15MLC,14.00,Homans 8/20/26 price changes: same product as PR1415MLC (G 14-15)
+CT-Homans,PR4V90,25.50,"Homans 8/20/26 price changes (4"" - 90°)"
+CT-Homans,JM4V90,25.50,"Homans 8/20/26 price changes: same product as PR4V90 (4"" - 90°)"
+CT-Homans,PR4V45,22.70,"Homans 8/20/26 price changes (4"" - 45°)"
+CT-Homans,JM4V45,22.70,"Homans 8/20/26 price changes: same product as PR4V45 (4"" - 45°)"
+CT-Homans,PR4VT,33.20,"Homans 8/20/26 price changes (4"" - Tee)"
+CT-Homans,JM4VT,33.20,"Homans 8/20/26 price changes: same product as PR4VT (4"" - Tee)"
+CT-Homans,JM16MLC,16.50,Homans 8/20/26 price changes: same product as PR1617MLC (G 16-17)
+CT-Homans,PR5V90,31.70,"Homans 8/20/26 price changes (5"" - 90°)"
+CT-Homans,JM5V90,31.70,"Homans 8/20/26 price changes: same product as PR5V90 (5"" - 90°)"
+CT-Homans,PR5V45,28.20,"Homans 8/20/26 price changes (5"" - 45°)"
+CT-Homans,JM5V45,28.20,"Homans 8/20/26 price changes: same product as PR5V45 (5"" - 45°)"
+CT-Homans,PR5VT,36.60,"Homans 8/20/26 price changes (5"" - Tee)"
+CT-Homans,JM5VT,36.60,"Homans 8/20/26 price changes: same product as PR5VT (5"" - Tee)"
+CT-Homans,PR18MLC,20.30,Homans 8/20/26 price changes (G 18)
+CT-Homans,JM18MLC,20.30,Homans 8/20/26 price changes: same product as PR18MLC (G 18)
+CT-Homans,PR6V90,46.80,"Homans 8/20/26 price changes (6"" - 90°)"
+CT-Homans,JM6V90,46.80,"Homans 8/20/26 price changes: same product as PR6V90 (6"" - 90°)"
+CT-Homans,PR6V45,41.70,"Homans 8/20/26 price changes (6"" - 45°)"
+CT-Homans,JM6V45,41.70,"Homans 8/20/26 price changes: same product as PR6V45 (6"" - 45°)"
+CT-Homans,PR6VT,54.10,"Homans 8/20/26 price changes (6"" - Tee)"
+CT-Homans,JM6VT,54.10,"Homans 8/20/26 price changes: same product as PR6VT (6"" - Tee)"
+CT-Homans,PR1920MLC,24.10,Homans 8/20/26 price changes (G 19-20)
+CT-Homans,JM1920MLC,24.10,Homans 8/20/26 price changes: same product as PR1920MLC (G 19-20)
+CT-Homans,PR8V45,45.30,"Homans 8/20/26 price changes (8"" - 45°)"
+CT-Homans,JM8V45,45.30,"Homans 8/20/26 price changes: same product as PR8V45 (8"" - 45°)"
+CT-Homans,PR8VT,58.70,"Homans 8/20/26 price changes (8"" - Tee)"
+CT-Homans,JM8VT,58.70,"Homans 8/20/26 price changes: same product as PR8VT (8"" - Tee)"
+CT-Homans,PR2122MLC,30.40,Homans 8/20/26 price changes (G 21-22)
+CT-Homans,JM2122MLC,30.40,Homans 8/20/26 price changes: same product as PR2122MLC (G 21-22)
+CT-Homans,PR10V90,65.20,"Homans 8/20/26 price changes (10"" - 90°)"
+CT-Homans,JM10V90,65.20,"Homans 8/20/26 price changes: same product as PR10V90 (10"" - 90°)"
+CT-Homans,PR10V45,58.00,"Homans 8/20/26 price changes (10"" - 45°)"
+CT-Homans,JM10V45,58.00,"Homans 8/20/26 price changes: same product as PR10V45 (10"" - 45°)"
+CT-Homans,PR10VT,84.70,"Homans 8/20/26 price changes (10"" - Tee)"
+CT-Homans,JM10VT,84.70,"Homans 8/20/26 price changes: same product as PR10VT (10"" - Tee)"
+CT-Homans,PR2324MLC,38.10,Homans 8/20/26 price changes (G 23-24)
+CT-Homans,JM2324MLC,38.10,Homans 8/20/26 price changes: same product as PR2324MLC (G 23-24)
+CT-Homans,PR12V90,93.70,"Homans 8/20/26 price changes (12"" - 90°)"
+CT-Homans,JM12V90,93.70,"Homans 8/20/26 price changes: same product as PR12V90 (12"" - 90°)"
+CT-Homans,PR12V45,83.50,"Homans 8/20/26 price changes (12"" - 45°)"
+CT-Homans,JM12V45,83.50,"Homans 8/20/26 price changes: same product as PR12V45 (12"" - 45°)"
+CT-Homans,PR2526MLC,50.70,Homans 8/20/26 price changes (G 25-26)
+CT-Homans,JM2526MLC,50.70,Homans 8/20/26 price changes: same product as PR2526MLC (G 25-26)
+CT-Homans,JM27MLC,64.80,Homans 8/20/26 price changes: same product as PR2730MLC (G 27)
+CT-Homans,JM2833MLC,64.80,Homans 8/20/26 price changes: same product as PR3133MLC (G 28-33)
+CT-Homans,PR1011LFC,11.00,Homans 8/20/26 price changes (LFC 10-11)
+CT-Homans,JM1011LFC,11.00,Homans 8/20/26 price changes: same product as PR1011LFC (LFC 10-11)
+CT-Homans,PR1213LFC,13.70,Homans 8/20/26 price changes (LFC 12-13)
+CT-Homans,JM1213LFC,13.70,Homans 8/20/26 price changes: same product as PR1213LFC (LFC 12-13)
+CT-Homans,PR1415LFC,17.90,Homans 8/20/26 price changes (LFC 14-15)
+CT-Homans,JM1415LFC,17.90,Homans 8/20/26 price changes: same product as PR1415LFC (LFC 14-15)
+CT-Homans,PR1920LFC,32.90,Homans 8/20/26 price changes (LFC 19-20)
+CT-Homans,JM1920LFC,32.90,Homans 8/20/26 price changes: same product as PR1920LFC (LFC 19-20)
+CT-Homans,PR2122LFC,41.10,Homans 8/20/26 price changes (LFC 21-22)
+CT-Homans,JM2122LFC,41.10,Homans 8/20/26 price changes: same product as PR2122LFC (LFC 21-22)
+CT-Homans,PR2324LFC,52.10,Homans 8/20/26 price changes (LFC 23-24)
+CT-Homans,JM2324LFC,52.10,Homans 8/20/26 price changes: same product as PR2324LFC (LFC 23-24)
+CT-Homans,PR2526LFC,68.50,Homans 8/20/26 price changes (LFC 25-26)
+CT-Homans,JM2526LFC,68.50,Homans 8/20/26 price changes: same product as PR2526LFC (LFC 25-26)
+CT-Homans,PRPVCJ3,3.10,"Homans 8/20/26 price changes (Size 2-3 - max O.D. 2"" - price per L.F.)"
+CT-Homans,PVCJ3,3.10,"Homans 8/20/26 price changes: same product as PRPVCJ3 (Size 2-3 - max O.D. 2"" - price per L.F.)"
+CT-Homans,PRPVCJ5,2.50,"Homans 8/20/26 price changes (Size 4-5 - max O.D. 2-1/2"" - price per L.F.)"
+CT-Homans,PVCJ5,2.50,"Homans 8/20/26 price changes: same product as PRPVCJ5 (Size 4-5 - max O.D. 2-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ10,2.80,"Homans 8/20/26 price changes (Size 10 - max O.D. 4"" - price per L.F.)"
+CT-Homans,PVCJ10,2.80,"Homans 8/20/26 price changes: same product as PRPVCJ10 (Size 10 - max O.D. 4"" - price per L.F.)"
+CT-Homans,PRPVCJ11,3.00,"Homans 8/20/26 price changes (Size 11 - max O.D. 4-1/2"" - price per L.F.)"
+CT-Homans,PVCJ11,3.00,"Homans 8/20/26 price changes: same product as PRPVCJ11 (Size 11 - max O.D. 4-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ12,3.20,"Homans 8/20/26 price changes (Size 12 - max O.D. 5"" - price per L.F.)"
+CT-Homans,PVCJ12,3.20,"Homans 8/20/26 price changes: same product as PRPVCJ12 (Size 12 - max O.D. 5"" - price per L.F.)"
+CT-Homans,PRPVCJ13,3.40,"Homans 8/20/26 price changes (Size 13 - max O.D. 5-1/2"" - price per L.F.)"
+CT-Homans,PVCJ13,3.40,"Homans 8/20/26 price changes: same product as PRPVCJ13 (Size 13 - max O.D. 5-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ17,4.10,"Homans 8/20/26 price changes (Size 16-17 - max O.D. 7-1/2"" - price per L.F.)"
+CT-Homans,PVCJ17,4.10,"Homans 8/20/26 price changes: same product as PRPVCJ17 (Size 16-17 - max O.D. 7-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ18,4.30,"Homans 8/20/26 price changes (Size 18 - max O.D. 8-1/2"" - price per L.F.)"
+CT-Homans,PVCJ18,4.30,"Homans 8/20/26 price changes: same product as PRPVCJ18 (Size 18 - max O.D. 8-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ19,4.80,"Homans 8/20/26 price changes (Size 19 - max O.D. 9-1/2"" - price per L.F.)"
+CT-Homans,PVCJ19,4.80,"Homans 8/20/26 price changes: same product as PRPVCJ19 (Size 19 - max O.D. 9-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ20,5.00,"Homans 8/20/26 price changes (Size 20 - max O.D. 10-1/2"" - price per L.F.)"
+CT-Homans,PVCJ20,5.00,"Homans 8/20/26 price changes: same product as PRPVCJ20 (Size 20 - max O.D. 10-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ21,5.60,"Homans 8/20/26 price changes (Size 21 - max O.D. 11-1/2"" - price per L.F.)"
+CT-Homans,PVCJ21,5.60,"Homans 8/20/26 price changes: same product as PRPVCJ21 (Size 21 - max O.D. 11-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ22,6.10,"Homans 8/20/26 price changes (Size 22 - max O.D. 12-1/2"" - price per L.F.)"
+CT-Homans,PVCJ22,6.10,"Homans 8/20/26 price changes: same product as PRPVCJ22 (Size 22 - max O.D. 12-1/2"" - price per L.F.)"
+CT-Homans,PRPVCJ24,7.30,"Homans 8/20/26 price changes (Size 24 - max O.D. 15"" - price per L.F.)"
+CT-Homans,PVCJ24,7.30,"Homans 8/20/26 price changes: same product as PRPVCJ24 (Size 24 - max O.D. 15"" - price per L.F.)"
+CT-Homans,PRPVCJ26,8.00,"Homans 8/20/26 price changes (Size 26 - max O.D. 17"" - price per L.F.)"
+CT-Homans,PVCJ26,8.00,"Homans 8/20/26 price changes: same product as PRPVCJ26 (Size 26 - max O.D. 17"" - price per L.F.)"
+CT-Homans,PRPVCJ27,8.40,"Homans 8/20/26 price changes (Size 27 - max O.D. 18"" - price per L.F.)"
+CT-Homans,PVCJ27,8.40,"Homans 8/20/26 price changes: same product as PRPVCJ27 (Size 27 - max O.D. 18"" - price per L.F.)"
+CT-Homans,PRPVCJ29,9.60,"Homans 8/20/26 price changes (Size 29 - max O.D. 20"" - price per L.F.)"
+CT-Homans,PVCJ29,9.60,"Homans 8/20/26 price changes: same product as PRPVCJ29 (Size 29 - max O.D. 20"" - price per L.F.)"
+CT-Homans,PR020PVC3,178.90,"Homans 8/20/26 price changes (White .020 x 48"" w/SSL - bulk roll 3' x 100')"
+CT-Homans,JM020PVC3,178.90,"Homans 8/20/26 price changes: same product as PR020PVC3 (White .020 x 48"" w/SSL - bulk roll 3' x 100')"
+CT-Homans,PR020PVC4,234.60,"Homans 8/20/26 price changes (White .020 x 48"" w/SSL - bulk roll 4' x 100')"
+CT-Homans,JM020PVC4,234.60,"Homans 8/20/26 price changes: same product as PR020PVC4 (White .020 x 48"" w/SSL - bulk roll 4' x 100')"
