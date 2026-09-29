@@ -363,6 +363,18 @@
     }).eq("id", id).then(must);
   };
 
+  // Admin edit of a regular price-list item: saved under the item's own id and applied over the price list on every device.
+  Cloud.saveCatalogEdit = function (it, f) {
+    return client.from("catalog_items").upsert({
+      id: it.id, supplier: it.supplier, name: f.name, model: f.model || null, unit: f.unit || "EA", category: f.category || it.category,
+      price: f.price > 0 ? f.price : 0, active: true, created_by: user.email, updated_at: new Date().toISOString()
+    }, { onConflict: "id" }).then(must);
+  };
+
+  Cloud.resetCatalogEdit = function (id) {
+    return client.from("catalog_items").delete().eq("id", id).then(must);
+  };
+
   Cloud.rejectCatalogRequest = function (req, note) {
     return client.from("catalog_requests").update({
       status: "rejected", review_note: note || null, reviewed_by: user.email, reviewed_at: new Date().toISOString()

@@ -94,6 +94,7 @@ h3 { font-size: 16px; margin: 20px 0 8px; color: var(--muted); text-transform: u
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; color: var(--text);
 }
 .btn:active { transform: translateY(1px); }
+.btn.small { min-height: 36px; padding: 6px 12px; font-size: 14px; }
 .btn.primary { background: var(--kim-blue); border-color: var(--kim-blue); color: #fff; box-shadow: 0 4px 12px rgba(27,117,188,.28); }
 .btn.primary:active { background: var(--kim-blue-dark); }
 .btn.brand { background: var(--brand); border-color: var(--brand); color: var(--brand-contrast); }

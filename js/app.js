@@ -30,14 +30,18 @@
     return BY_SUPPLIER[b].length - BY_SUPPLIER[a].length;
   });
   // Items an admin approved from price-list requests (catalog_items table), merged into the price list.
+  // A row whose id is a regular price-list item's id (e.g. CT00585) is an admin's edit of that item.
   function addCatalogExtras(rows) {
-    var added = [];
+    var added = [], seen = {};
     (rows || []).forEach(function (r) {
       var key = r.supplier + "|" + r.id;
       var ex = BY_KEY[key];
-      if (ex && ex.added) {
-        // An admin edited an approved item: update it in place.
-        ex.name = r.name; ex.unit = String(r.unit || "EA").toUpperCase(); ex.category = r.category || "Added Items";
+      seen[key] = 1;
+      if (ex && !ex.jobOnly) {
+        if (!ex.added && !ex.orig) ex.orig = { name: ex.name, unit: ex.unit, category: ex.category, price: ex.price, model: ex.model };
+        ex.edited = !ex.added;
+        ex.editedBy = r.created_by || ""; ex.editedAt = r.updated_at || r.created_at || "";
+        ex.name = r.name; ex.unit = String(r.unit || "EA").toUpperCase(); ex.category = r.category || (ex.added ? "Added Items" : ex.category);
         ex.price = +r.price || 0; ex.model = r.model || "";
         if (indexed) S.buildIndex([ex]);
         if (typeof MATERIALS !== "undefined") { MATERIALS = null; MAT_BY_KEY = {}; }
@@ -50,6 +54,14 @@
       BY_KEY[key] = it;
       BY_SUPPLIER[r.supplier].push(it);
       added.push(it);
+    });
+    // An edit the admin reset: go back to the price-list values.
+    ITEMS.forEach(function (it) {
+      if (!it.edited || seen[it.key]) return;
+      Object.keys(it.orig).forEach(function (k) { it[k] = it.orig[k]; });
+      it.edited = false; it.orig = null;
+      if (indexed) S.buildIndex([it]);
+      if (typeof MATERIALS !== "undefined") { MATERIALS = null; MAT_BY_KEY = {}; }
     });
     if (added.length) {
       if (indexed) S.buildIndex(added);
@@ -648,7 +660,7 @@
       (Cloud.enabled ? '<button class="btn" data-action="shop">' + ICON_SHOP + "Shop Stock</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="pricing">' + ICON.tag + "Special Pricing</button>" : "") +
-      (isAdmin() ? '<button class="btn" data-action="catalog-requests">' + ICON.tag + "Price-list Requests" + (pendingCatalogRequests().length ? " (" + pendingCatalogRequests().length + ")" : "") + "</button>" : "") +
+      (isAdmin() ? '<button class="btn" data-action="catalog-requests">' + ICON.tag + "Price-list Requests" + (pendingCatalogRequests().length ? " (" + pendingCatalogRequests().length + ")" : "") + "</button>" + '<button class="btn" data-action="edit-products">' + ICON.tag + "Edit Products</button>" : "") +
       (canReviewInvoices() ? '<button class="btn" data-action="invoices">' + ICON.list + "Invoice Approval</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
@@ -806,9 +818,19 @@
     h += '<label class="field" style="margin-bottom:6px"><span>Supplier</span><select class="input" id="lookup-supplier">' +
       '<option value="">All suppliers</option>' +
       SUPPLIERS.map(function (s) { return '<option' + (s === state.lookupSupplier ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") +
-      "</select></label>" + finderHtml() + "</main>";
+      "</select></label>" + (state.view === "lookup" && isAdmin() ? editedProductsHtml() : "") + finderHtml() + "</main>";
     return h;
   };
+  // Admins: products edited away from the price-list file, one tap from Price Lookup.
+  function editedProductsHtml() {
+    var ed = ITEMS.filter(function (it) { return it.edited; });
+    return '<p class="hint" style="margin:0 0 6px">Admin: tap any product, then <b>Edit product</b> to change its name, part #, unit, price or category.</p>' +
+      (ed.length ? '<details class="card" style="padding:10px 14px;margin-bottom:8px"><summary><b>' + ed.length + " edited product" + (ed.length === 1 ? "" : "s") + "</b></summary>" +
+        ed.map(function (it) {
+          return '<button class="tile" style="margin-top:6px" data-action="catalog-edit" data-key="' + esc(it.key) + '"><div class="t-main"><div class="t-title">' + esc(it.name) + "</div>" +
+            '<div class="t-sub">' + esc(it.supplier) + " · " + (it.price > 0 ? fmtMoney(it.price) : "TBD") + " / " + esc(it.unit) + " (was " + (it.orig.price > 0 ? fmtMoney(it.orig.price) : "TBD") + ")</div></div></button>";
+        }).join("") + "</details>" : "");
+  }
   VIEWS["shop-add"] = function () { return VIEWS.lookup(); };
   AFTER["shop-add"] = function () { AFTER.lookup(); };
   AFTER.lookup = function () {
@@ -1101,7 +1123,9 @@
       openSheet('<h2>' + esc(it.name) + "</h2><dl class=\"kv\"><dt>Supplier</dt><dd>" + esc(it.supplier) + "</dd><dt>Price</dt><dd>" +
         (it.price > 0 ? fmtMoney(it.price) : "TBD") + " / " + esc(it.unit) + "</dd><dt>Category</dt><dd>" + esc(it.category) + "</dd>" +
         (it.model ? "<dt>Model #</dt><dd>" + esc(it.model) + "</dd>" : "") + "<dt>Item ID</dt><dd>" + esc(it.id) + "</dd></dl>" +
+        (it.edited ? '<p class="hint">Edited by an admin. Price list had ' + (it.orig.price > 0 ? fmtMoney(it.orig.price) : "TBD") + " / " + esc(it.orig.unit) + ".</p>" : "") +
         '<div class="btn-row" style="margin-top:18px"><button class="btn" data-action="close-sheet">Close</button>' +
+        (isAdmin() && !it.jobOnly ? '<button class="btn" data-action="catalog-edit" data-key="' + esc(it.key) + '">Edit product</button>' : "") +
         '<button class="btn primary" data-action="order-from-lookup" data-supplier="' + esc(it.supplier) + '">Start order with ' + esc(it.supplier) + "</button></div>");
       return;
     }
@@ -2529,14 +2553,14 @@
     error: ["warn", "Couldn't read"],
     matched: ["ok", "Matches order"],
     approved: ["done", "Approved"],
-    sent_back: ["sent", "Sent back to supplier"]
+    sent_back: ["sent", "Rejected / sent back"]
   };
   var INV_FILTERS = [
     ["attention", "Needs review", function (i) { return i.status === "mismatch" || i.status === "no_order" || i.status === "error"; }],
     ["matched", "Matches order", function (i) { return i.status === "matched"; }],
     ["processing", "Checking", function (i) { return i.status === "processing"; }],
     ["approved", "Approved", function (i) { return i.status === "approved"; }],
-    ["sent_back", "Sent back", function (i) { return i.status === "sent_back"; }],
+    ["sent_back", "Rejected", function (i) { return i.status === "sent_back"; }],
     ["all", "All", function () { return true; }]
   ];
   function invBadge(st) { var m = INV_STATUS[st] || ["", st]; return '<span class="inv-badge ' + m[0] + '">' + esc(m[1]) + "</span>"; }
@@ -2691,10 +2715,10 @@
       h += '<h3>Review</h3><div class="card"><label class="field"><span>Notes</span><textarea class="input" id="inv-notes" placeholder="Anything to remember about this invoice">' + esc(inv.notes || "") + "</textarea></label>" +
         '<div class="btn-row">' +
         (inv.status !== "approved" ? '<button class="btn brand" data-action="inv-approve">Approve invoice</button>' : "") +
-        (order && inv.status !== "approved" ? '<button class="btn danger" data-action="inv-send-back">Send back to supplier</button>' : "") +
+        (inv.status !== "sent_back" ? '<button class="btn danger" data-action="inv-send-back">Reject invoice</button>' : "") +
         '<button class="btn" data-action="inv-rerun">Re-run AI check</button>' +
         (isAdmin() ? '<button class="btn danger" data-action="inv-delete">Delete</button>' : "") + "</div>" +
-        (inv.sent_back_at ? '<div class="hint" style="margin:8px 0 0">Sent back to supplier ' + esc(fmtDate(inv.sent_back_at)) + ".</div>" : "") + "</div>";
+        (inv.sent_back_at ? '<div class="hint" style="margin:8px 0 0">Rejected' + (inv.status === "sent_back" ? "" : " earlier") + " " + esc(fmtDate(inv.sent_back_at)) + ".</div>" : "") + "</div>";
     } else {
       h += '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="inv-stop">Cancel check</button>' +
         (isAdmin() ? '<button class="btn danger" data-action="inv-delete">Delete invoice</button>' : "") + "</div>";
@@ -2778,7 +2802,7 @@
         var row = { line: l, it: it, how: how, list: null, special: false, status: "unknown", diff: null, note: "" };
         if (!it) return row;
         var p = priceFor(ctx, it);
-        row.list = p.price; row.special = p.special;
+        row.list = p.price; row.special = p.special; row.book = p.book;
         if (l.unit_price == null) row.status = "no_price";
         else if (!(p.price > 0)) row.status = "no_list";
         else {
@@ -2791,6 +2815,13 @@
         }
         return row;
       });
+  }
+  // Where the compared price came from, so a wrong one can be traced (and fixed by an admin).
+  function plSourceText(r, sup, job) {
+    var it = r.it, s = r.how === "description" ? "Matched by description to: " + esc(it.name) + ". " : "Matched by item code to: " + esc(it.name) + ". ";
+    if (r.special) return s + "Price from Job " + esc(job) + "'s special pricing (" + esc(r.book || "price book") + ")" + (it.jobOnly ? "." : "; regular price list " + (it.price > 0 ? fmtMoney(it.price) : "TBD") + ".");
+    return s + "Price from the regular " + esc(sup) + " price list (item " + esc(it.id) + (it.model ? ", #" + esc(it.model) : "") + ")" +
+      (it.edited ? ", edited by an admin" : "") + (job ? "; Job " + esc(job) + " has no special price for it." : ".");
   }
   function priceListHtml(inv) {
     var ex = inv.extracted || {};
@@ -2819,50 +2850,75 @@
         '<div class="il-name">' + esc(l.description) + (l.item_code ? ' <span class="hint">#' + esc(l.item_code) + "</span>" : "") + "</div>" +
         '<div class="il-grid"><div><small>Invoice</small>' + (l.quantity != null ? esc(fmtQty(l.quantity)) + " × " : "") + (l.unit_price != null ? fmtMoney(l.unit_price) : "-") + "</div>" +
         "<div><small>" + (r.special ? '<span class="job-price">Job price</span>' : "Price list") + "</small>" + (r.list != null ? fmtMoney(r.list) + (r.it ? " / " + esc(r.it.unit) : "") : "-") + "</div></div>" +
-        (r.it && r.how === "description" ? '<div class="hint" style="margin:4px 0 0">Matched by description: ' + esc(r.it.name) + "</div>" : "") +
-        (r.note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.note) + "</div>" : "") + "</div>";
+        (r.it ? '<div class="hint" style="margin:4px 0 0">' + plSourceText(r, sup, job) + "</div>" : "") +
+        (r.note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.note) + "</div>" : "") +
+        (r.it && isAdmin() && !r.it.jobOnly ? '<button class="btn small" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(r.it.key) + '">Edit product</button>' : "") + "</div>";
     }).join("") + "</div></div>";
     return h;
   }
 
-  // Send back: email with subject "Incorrect invoice <#>", order PDF + invoice file attached. Only when the reviewer chooses to.
+  // Reject: optionally email the supplier (subject "Incorrect invoice <#>", our order PDF when there is one + their invoice),
+  // then mark the invoice rejected. Works without an order: the price-list check supplies the lines that are wrong.
+  function rejectLines(inv, order) {
+    if (order) return ((inv.comparison || {}).rows || []).filter(function (r) { return r.status === "price" || r.status === "not_on_order"; }).map(function (r) {
+      return "- " + r.description + (r.code ? " [#" + r.code + "]" : "") + ": " + (r.status === "price"
+        ? "invoiced at " + fmtMoney(r.inv_price) + "/" + (r.unit || "unit") + ", our order price is " + fmtMoney(r.ord_price)
+        : "not on our order");
+    });
+    var saved = store.get("invPL", {})[inv.id] || {}, sup = saved.supplier || inv.supplier || "", job = saved.job != null ? saved.job : guessInvoiceJob(inv);
+    if (!sup) return [];
+    return priceListCheck(inv, sup, job).filter(function (r) { return r.status === "price" || r.status === "check"; }).map(function (r) {
+      var l = r.line;
+      return "- " + l.description + (l.item_code ? " [#" + l.item_code + "]" : "") + ": invoiced at " + fmtMoney(l.unit_price) + "/" + (l.unit || "unit") +
+        ", our " + (r.special ? "job " + job + " price" : "price") + " is " + fmtMoney(r.list) + "/" + r.it.unit;
+    });
+  }
   function openSendBackSheet(inv) {
     var order = orderForInvoice(inv);
-    var bad = ((inv.comparison || {}).rows || []).filter(function (r) { return r.status === "price" || r.status === "not_on_order"; });
+    var lines = rejectLines(inv, order);
     var subject = "Incorrect invoice " + (inv.invoice_number || "");
     var to = emailFor(inv.supplier || (order && order.supplier)) || "";
-    var body = "Hello,\n\nInvoice " + (inv.invoice_number || "") + " does not match our order " + (order ? order.number : inv.order_number || "") +
-      (order ? " (Job " + order.jobNumber + ")" : "") + ". Please review and send a corrected invoice.\n\n" +
-      (bad.length ? "Lines that don't match:\n" + bad.map(function (r) {
-        return "- " + r.description + (r.code ? " [#" + r.code + "]" : "") + ": " + (r.status === "price"
-          ? "invoiced at " + fmtMoney(r.inv_price) + "/" + (r.unit || "unit") + ", our order price is " + fmtMoney(r.ord_price)
-          : "not on our order");
-      }).join("\n") + "\n\n" : "") + "Our order and your invoice are attached.\n\nThank you,\n" + (myName() || "") + "\nKim Industries";
+    var ref = order ? "our order " + order.number + " (Job " + order.jobNumber + ")" : inv.order_number ? "our order " + inv.order_number : "our pricing";
+    var body = "Hello,\n\nInvoice " + (inv.invoice_number || "") + " does not match " + ref + ". Please review and send a corrected invoice.\n\n" +
+      (lines.length ? "Lines that don't match:\n" + lines.join("\n") + "\n\n" : "") +
+      (order ? "Our order and your invoice are attached." : "Your invoice is attached.") + "\n\nThank you,\n" + (myName() || "") + "\nKim Industries";
     var canShare = !!(navigator.canShare && window.File && navigator.canShare({ files: [new File([""], "a.pdf", { type: "application/pdf" })] }));
-    var h = "<h2>Send invoice back to supplier</h2>" +
+    var nFiles = order ? 2 : 1;
+    var h = "<h2>Reject invoice</h2>" +
+      '<p class="hint" style="margin-top:0">Email the supplier to ask for a corrected invoice, or just mark it rejected.</p>' +
       '<label class="field"><span>To</span><input class="input" id="sb-to" type="email" value="' + esc(to) + '" placeholder="supplier email"></label>' +
       '<label class="field"><span>Subject</span><input class="input" id="sb-subject" value="' + esc(subject) + '"></label>' +
       '<label class="field"><span>Message</span><textarea class="input" id="sb-body" style="min-height:180px">' + esc(body) + "</textarea></label>" +
-      '<div class="hint">Attachments: <b>Order ' + esc(order ? order.number : "") + ".pdf</b> and <b>" + esc(inv.file_name || "invoice") + "</b></div>" +
+      '<div class="hint">Attachments: ' + (order ? "<b>Order " + esc(order.number) + ".pdf</b> and " : "") + "<b>" + esc(inv.file_name || "invoice") + "</b></div>" +
       '<div class="btn-row" style="margin-top:12px">' +
-      (canShare ? '<button class="btn primary" id="sb-share">Open email with attachments</button>' : "") +
-      '<button class="btn' + (canShare ? "" : " primary") + '" id="sb-mail">' + (canShare ? "Download files + email draft" : "Download attachments + open email") + "</button></div>" +
-      '<p class="hint" style="font-size:13px">' + (canShare ? "Choose your email app, check the message, and send." : "Your email app opens with the subject and message filled in. Attach the two downloaded files, then send.") + "</p>" +
-      '<button class="btn block" data-action="close-sheet">Cancel</button>';
+      (canShare ? '<button class="btn primary" id="sb-share">Open email with attachment' + (nFiles > 1 ? "s" : "") + "</button>" : "") +
+      '<button class="btn' + (canShare ? "" : " primary") + '" id="sb-mail">' + (canShare ? "Download + email draft" : "Download attachment" + (nFiles > 1 ? "s" : "") + " + open email") + "</button></div>" +
+      '<p class="hint" style="font-size:13px">' + (canShare ? "Choose your email app, check the message, and send." : "Your email app opens with the subject and message filled in. Attach the downloaded file" + (nFiles > 1 ? "s" : "") + ", then send.") + "</p>" +
+      '<label class="field"><span>Reason (saved with the invoice, optional)</span><input class="input" id="sb-reason" placeholder="e.g. Billed above job pricing"></label>' +
+      '<div class="btn-row"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn danger" id="sb-only">Reject without emailing</button></div>';
     openSheet(h, function (sheet) {
       function files() {
-        var o = JSON.parse(JSON.stringify(order));
-        o.showPricing = true;
-        return Promise.all([buildPdf(o), Cloud.downloadInvoiceFile(inv.file_path)]).then(function (r) {
-          return [new File([r[0]], pdfName(o), { type: "application/pdf" }), new File([r[1]], inv.file_name || "invoice.pdf", { type: inv.file_type || r[1].type || "application/pdf" })];
+        var jobs = [Cloud.downloadInvoiceFile(inv.file_path)];
+        if (order) { var o = JSON.parse(JSON.stringify(order)); o.showPricing = true; jobs.push(buildPdf(o)); }
+        return Promise.all(jobs).then(function (r) {
+          var out = [new File([r[0]], inv.file_name || "invoice.pdf", { type: inv.file_type || r[0].type || "application/pdf" })];
+          if (order) out.unshift(new File([r[1]], pdfName(o), { type: "application/pdf" }));
+          return out;
         });
       }
-      function done() {
+      function mark(emailed) {
+        var reason = sheet.querySelector("#sb-reason").value.trim(), now = new Date().toISOString();
+        var patch = { status: "sent_back", sent_back_at: now, reviewed_by: Cloud.user.email, reviewed_at: now };
+        var note = [reason ? "Rejected: " + reason : "", emailed ? "" : "(not emailed)"].filter(Boolean).join(" ");
+        if (note) patch.notes = (inv.notes ? inv.notes + "\n" : "") + note;
         closeSheet();
-        if (!confirm("Did you send the email? Mark this invoice as sent back to the supplier?")) return;
-        Cloud.updateInvoice(inv.id, { status: "sent_back", sent_back_at: new Date().toISOString(), reviewed_by: Cloud.user.email, reviewed_at: new Date().toISOString() })
-          .then(refreshInvoices).then(function () { toast("Marked as sent back"); render(); }, function (e) { toast(e.message); });
+        Cloud.updateInvoice(inv.id, patch).then(refreshInvoices).then(function () { toast("Invoice rejected"); render(); }, function (e) { toast(e.message); });
       }
+      function done() {
+        if (!confirm("Did you send the email? Mark this invoice as rejected?")) { closeSheet(); return; }
+        mark(true);
+      }
+      sheet.querySelector("#sb-only").addEventListener("click", function () { mark(false); });
       var share = sheet.querySelector("#sb-share");
       if (share) share.addEventListener("click", function () {
         share.disabled = true;
@@ -3089,7 +3145,7 @@
     if (Cloud.enabled && Cloud.user) {
       h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:4px">' + esc(Cloud.user.email) + "</div>" +
         '<div class="hint" style="margin:0 0 10px">' + (isAdmin() ? "Admin" : canEditShop() ? "Can change shop stock" : "Crew member") + "</div>" +
-        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button><button type="button" class="btn brand" data-action="catalog-requests">Price-list Requests</button>' : "") +
+        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button><button type="button" class="btn brand" data-action="catalog-requests">Price-list Requests</button><button type="button" class="btn brand" data-action="edit-products">Edit Products</button>' : "") +
         '<button type="button" class="btn" data-action="sign-out">Sign out</button></div></div>';
     }
     h += '<div class="card"><label class="field"><span>Your name (shown on orders)</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name || myName()) + '"></label>' +
@@ -3158,22 +3214,37 @@
     },
     "catalog-edit": function (el) {
       var it = BY_KEY[el.getAttribute("data-key")];
-      if (!it) return;
-      var units = CAT.units.slice().sort();
-      var h = "<h2>Edit price-list item</h2>" +
+      if (!it || it.jobOnly || !isAdmin()) return;
+      if (!Cloud.enabled || !navigator.onLine) { toast("Connect to the internet to edit products"); return; }
+      var units = CAT.units.slice().sort(), o = it.orig;
+      if (units.indexOf(it.unit) < 0) units.push(it.unit);
+      var h = "<h2>Edit product</h2>" +
+        '<datalist id="ce-cats">' + CAT.categories.slice().sort().map(function (c) { return '<option value="' + esc(c) + '">'; }).join("") + "</datalist>" +
         '<label class="field"><span>Item name</span><input class="input" id="ce-name" value="' + esc(it.name) + '"></label>' +
         '<div class="filters"><label class="field"><span>Part #</span><input class="input" id="ce-model" value="' + esc(it.model || "") + '"></label>' +
         '<label class="field"><span>Unit</span><select class="input" id="ce-unit">' + units.map(function (u) { return "<option" + (u === it.unit ? " selected" : "") + ">" + esc(u) + "</option>"; }).join("") + "</select></label>" +
         '<label class="field"><span>Price (blank = TBD)</span><input class="input" id="ce-price" type="number" inputmode="decimal" min="0" step="any" value="' + (it.price > 0 ? esc(it.price) : "") + '"></label>' +
-        '<label class="field"><span>Category</span><input class="input" id="ce-cat" list="cat-list" value="' + esc(it.category) + '"></label></div>' +
-        '<p class="hint">Supplier: ' + esc(it.supplier) + '</p><div class="btn-row"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ce-save">Save changes</button></div>';
+        '<label class="field"><span>Category</span><input class="input" id="ce-cat" list="ce-cats" value="' + esc(it.category) + '"></label></div>' +
+        '<p class="hint">Supplier: ' + esc(it.supplier) + " · Item ID " + esc(it.id) +
+        (o ? "<br>Edited" + (it.editedBy ? " by " + esc(it.editedBy.split("@")[0]) : "") + (it.editedAt ? " " + esc(fmtDate(it.editedAt)) : "") +
+          ". Original price list: " + (o.price > 0 ? fmtMoney(o.price) : "TBD") + " / " + esc(o.unit) + (o.model ? " · #" + esc(o.model) : "") + (o.name !== it.name ? " · " + esc(o.name) : "") : "") + "</p>" +
+        '<p class="hint">Changes apply to everyone. Job special pricing still wins on that job; sent orders keep the prices they were sent with.</p>' +
+        '<div class="btn-row">' + (o ? '<button class="btn danger" id="ce-reset">Undo edits</button>' : "") +
+        '<button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ce-save">Save changes</button></div>';
       openSheet(h, function (sheet) {
+        function after(msg) { return refreshCatalog().then(function () { closeSheet(); toast(msg); var y = window.scrollY; render(); window.scrollTo(0, y); }); }
         sheet.querySelector("#ce-save").addEventListener("click", function (e) {
           var f = { name: sheet.querySelector("#ce-name").value.trim(), model: sheet.querySelector("#ce-model").value.trim(), unit: sheet.querySelector("#ce-unit").value,
             price: parseFloat(sheet.querySelector("#ce-price").value) || 0, category: sheet.querySelector("#ce-cat").value.trim() };
           if (!f.name) { toast("Item name is required"); return; }
           e.target.disabled = true;
-          Cloud.updateCatalogItem(it.id, f).then(refreshCatalog).then(function () { closeSheet(); toast("Item updated"); render(); }, function (ex) { e.target.disabled = false; toast(ex.message); });
+          (it.added ? Cloud.updateCatalogItem(it.id, f) : Cloud.saveCatalogEdit(it, f)).then(function () { return after("Product updated"); }, function (ex) { e.target.disabled = false; toast(ex.message); });
+        });
+        var rs = sheet.querySelector("#ce-reset");
+        if (rs) rs.addEventListener("click", function () {
+          if (!confirm("Undo your edits and go back to the price-list values?")) return;
+          rs.disabled = true;
+          Cloud.resetCatalogEdit(it.id).then(function () { return after("Back to the price-list values"); }, function (ex) { rs.disabled = false; toast(ex.message); });
         });
       });
     },
@@ -3306,6 +3377,7 @@
     },
     "settings": function () { go("settings"); refreshAccess(); },
     "history": function () { go("history"); },
+    "edit-products": function () { ACTIONS.lookup(); refreshCatalog().then(function () { if (state.view === "lookup") render(); }); },
     "lookup": function () { go("lookup", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
     "new-order": function () { state.draft = {}; go("supplier"); },
     "to-supplier": function () { go("supplier"); },
