@@ -11,7 +11,13 @@ Expected columns (first sheet, header row 1):
 
 data/source/model_overrides.csv (supplier,id,model,note) replaces the model number of listed items,
 e.g. to use a supplier's own part numbers from a quote. Prices are never changed by it.
+
+data/source/supplier_prices/*.csv (supplier,model,price) sets the day-to-day price of that supplier's items,
+matched by model number (ignoring spaces, dashes, dots and slashes), e.g. from a supplier's price book.
+Files are applied in name order, so a newer file (named by date) wins. Job special pricing is separate.
 """
+import glob
+import re
 import csv
 import json
 import os
@@ -24,12 +30,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "data", "source", "Material_Dashboard.xlsx")
 OUT = os.path.join(ROOT, "data", "catalog.js")
 OVERRIDES = os.path.join(ROOT, "data", "source", "model_overrides.csv")
+SUPPLIER_PRICES = os.path.join(ROOT, "data", "source", "supplier_prices")
 
 UNIT_ALIASES = {"GALLON": "GAL", "QUART": "QT", "BOX": "BX", "SHT": "SH"}
 
 
 def clean(v):
     return " ".join(str(v).split()) if v is not None else ""
+
+
+def model_key(m):
+    return re.sub(r"[\s\-_./#]", "", str(m or "")).upper()
 
 
 def main():
@@ -60,6 +71,17 @@ def main():
                 overrides[(o["supplier"].strip(), o["id"].strip())] = o["model"].strip()
     used = set()
 
+    prices = {}  # (supplier, model key) -> (price, file)
+    for path in sorted(glob.glob(os.path.join(SUPPLIER_PRICES, "*.csv"))):
+        with open(path, newline="", encoding="utf-8") as f:
+            for o in csv.DictReader(f):
+                try:
+                    prices[(o["supplier"].strip(), model_key(o["model"]))] = (round(float(o["price"]), 4), os.path.basename(path))
+                except (TypeError, ValueError):
+                    pass
+    priced = set()
+    changed = 0
+
     seen = set()
     for r in rows:
         name = clean(r[c_name])
@@ -78,6 +100,12 @@ def main():
         if (sup, iid) in overrides:
             model = overrides[(sup, iid)]
             used.add((sup, iid))
+        pk = (sup, model_key(model))
+        if model and pk in prices:
+            if prices[pk][0] != price:
+                changed += 1
+            price = prices[pk][0]
+            priced.add(pk)
         key = f"{sup}|{iid}"
         if key in seen:  # keep ids unique within a supplier
             iid = f"{iid}-{len(items)}"
@@ -109,6 +137,10 @@ def main():
     for k in overrides.keys() - used:
         print(f"WARNING: model override for {k[0]} item {k[1]} matched nothing")
     print(f"Applied {len(used)} model overrides")
+    missing = sorted(k for k in prices.keys() - priced)
+    print(f"Supplier prices: {len(priced)} part numbers applied ({changed} item prices changed), {len(missing)} not in the price list")
+    for k in missing:
+        print(f"  not in price list: {k[0]} {k[1]} ({prices[k][1]})")
     print(f"Wrote {len(items)} items, {len(suppliers)} suppliers, {len(categories)} categories -> {OUT}")
 
 

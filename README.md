@@ -104,6 +104,15 @@ left out of the order total.
 `data/source/model_overrides.csv` swaps in a different model number for specific items (for example GIC's
 own part numbers, taken from a GIC quote) every time the price list is rebuilt. It never changes prices.
 
+`data/source/supplier_prices/*.csv` (supplier, model, price) sets a supplier's **day-to-day prices** from their price book,
+matched by part number. Files apply in name order, so name them `<supplier>_<date>.csv` and the newest wins. Currently:
+CT-Homans from the *Mechanical Insulation Pricebook 8.11.26* (713 part numbers; "Call" items keep the old price).
+To load a new book, replace or add the CSV and rebuild. Job special pricing still overrides these on its jobs.
+
+**Admins can also edit single products in the app:** Settings (or home) → **Edit Products**, or **Edit product** on an
+invoice's price-list check. Edits are saved in the `catalog_items` table (run `supabase/catalog.sql` once), apply on every
+phone, and can be undone. They sit on top of the price list, so a rebuilt price list doesn't change an edited item.
+
 ## Tests
 
 ```
@@ -154,9 +163,10 @@ Claude, whichever key is set, running in the `invoice-agent` Supabase Edge Funct
    pricing). It flags lines billed at a different price and lines that weren't on the order, and notes short or over shipments.
 
 Invoices land in tabs: **Needs review** (pricing doesn't match / no order found / couldn't read), **Matches order**,
-**Approved**, **Sent back**. On each invoice the reviewer can **Approve**, choose a different order, re-run the check, or
-**Send back to supplier**. That opens an email (subject "Incorrect invoice [number]") listing the mismatched lines,
-with our order PDF and the vendor's invoice attached. Nothing is sent automatically: on phones it opens the
+**Approved**, **Rejected**. On each invoice the reviewer can **Approve**, choose a different order, re-run the check, or
+**Reject invoice**, with or without an order. That opens an email (subject "Incorrect invoice [number]") listing the mismatched
+lines (from the order, or from the price-list check when there's no order), with our order PDF (if any) and the vendor's invoice
+attached. **Reject without emailing** just marks it rejected, with an optional reason saved in the notes. Nothing is sent automatically: on phones it opens the
 share sheet with the attachments; on computers it downloads both files and opens an email draft to attach them to.
 
 Who can see invoices: admins, and people given **Can review invoices** in Users & Permissions.
