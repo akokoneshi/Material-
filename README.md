@@ -171,6 +171,11 @@ lines (from the order, or from the price-list check when there's no order), with
 attached. **Reject without emailing** just marks it rejected, with an optional reason saved in the notes. Nothing is sent automatically: on phones it opens the
 share sheet with the attachments; on computers it downloads both files and opens an email draft to attach them to.
 
+**Items that aren't in our pricing:** in an invoice's price-list check, lines marked "Not in price list" can be added right
+from the invoice (one line, or all of them at once). Admins choose **Day-to-day price list** (every job), **Job special pricing
+only** (a book for that job; a new "<supplier> items from invoices" book is made if the job has none), or **Both**, and can fix
+the name, part #, unit, price and category first. Invoice reviewers who aren't admins send them as price-list requests instead.
+
 Who can see invoices: admins, and people given **Can review invoices** in Users & Permissions.
 
 **One-time setup**

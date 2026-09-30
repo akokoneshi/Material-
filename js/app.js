@@ -2807,11 +2807,14 @@
     var pool = (BY_SUPPLIER[supplier] || []).concat(job ? jobItems(job, supplier) : []);
     ensureIndex();
     var byCode = {};
-    pool.forEach(function (it) { var k = plCodeNorm(it.model); if (k.length >= 4 && !byCode[k]) byCode[k] = it; });
+    var byName = {}, nameKey = function (x) { return String(x || "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim(); };
+    pool.forEach(function (it) { var k = plCodeNorm(it.model); if (k.length >= 4 && !byCode[k]) byCode[k] = it; if (!byName[nameKey(it.name)]) byName[nameKey(it.name)] = it; });
     var ctx = { jobNumber: job || "" };
     return (ex.lines || []).filter(function (l) { return !PL_CHARGE_RE.test((l.item_code || "") + " " + (l.description || "")) || /\d\s*(x|")\s*\d|#\d/i.test(l.description || ""); })
       .map(function (l) {
         var it = byCode[plCodeNorm(l.item_code)] || null, how = it ? "code" : "";
+        // Same name as an item (e.g. one added from an earlier invoice without a part #).
+        if (!it && l.description && byName[nameKey(l.description)]) { it = byName[nameKey(l.description)]; how = "description"; }
         if (!it && l.description) {
           // Description + size: only accept a clear match (same sizes, every word found).
           var res = S.search(pool, l.description);
@@ -2864,7 +2867,9 @@
     h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + " line" + (bad.length === 1 ? "" : "s") + " billed at a different price than " + (job ? "the job / price list" : "the price list") + "</b>" +
       (over > 0.005 ? "<br>Overbilled by about " + fmtMoney(round2(over)) + " in total." : "") + underTxt + "</div>"
       : '<div class="notice ok-notice">Every line found in the price list is billed at ' + (under.length ? "or below " : "") + "the listed price." + underTxt + "</div>";
-    if (unk.length) h += '<p class="hint">' + unk.length + " line" + (unk.length === 1 ? " isn't" : "s aren't") + " in our price list for " + esc(sup) + " and couldn't be checked.</p>";
+    if (unk.length) h += '<p class="hint">' + unk.length + " line" + (unk.length === 1 ? " isn't" : "s aren't") + " in our price list for " + esc(sup) + " and couldn't be checked.</p>" +
+      '<button class="btn block" style="margin-bottom:10px" data-action="inv-add-items">' + ICON.plus + (isAdmin() ? "Add " + (unk.length === 1 ? "it" : "these " + unk.length) + " to our pricing"
+        : "Ask an admin to add " + (unk.length === 1 ? "it" : "these " + unk.length)) + "</button>";
     h += '<div class="inv-lines">' + rows.map(function (r) {
       var cls = { ok: "ok", under: "ok", price: "bad", check: "bad", unknown: "info", no_list: "info", no_price: "info" }[r.status];
       var label = { ok: "Matches list", under: r.special ? "Lower than job price" : "Lower than list", price: "Price differs", check: "Check units", unknown: "Not in price list", no_list: "No list price", no_price: "No price on invoice" }[r.status];
@@ -2877,9 +2882,119 @@
         (r.status === "under" ? '<div class="hint pos" style="margin:4px 0 0">' + esc(lowerNote(r.diff, l.quantity, r.it.unit, r.special ? "the job price" : "the price list")) + "</div>" : "") +
         (r.it ? '<div class="hint" style="margin:4px 0 0">' + plSourceText(r, sup, job) + "</div>" : "") +
         (r.note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.note) + "</div>" : "") +
-        (r.it && isAdmin() && !r.it.jobOnly ? '<button class="btn small" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(r.it.key) + '">Edit product</button>' : "") + "</div>";
+        (r.it && isAdmin() && !r.it.jobOnly ? '<button class="btn small" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(r.it.key) + '">Edit product</button>' : "") +
+        (r.status === "unknown" ? '<button class="btn small" style="margin-top:8px" data-action="inv-add-items" data-line="' + esc(l.line) + '">' + (isAdmin() ? "Add to our pricing" : "Ask to add") + "</button>" : "") + "</div>";
     }).join("") + "</div></div>";
     return h;
+  }
+
+  // Add invoice lines that aren't in our pricing: to the day-to-day price list, to the job's special price book, or both.
+  // Admins save directly; invoice reviewers who aren't admins send price-list requests for an admin to approve.
+  function plUnitFor(u) {
+    u = String(u || "").toUpperCase();
+    if (CAT.units.indexOf(u) >= 0) return u;
+    var m = plUnit(u);
+    return CAT.units.indexOf(m) >= 0 ? m : "EA";
+  }
+  function quoteKey(l) {
+    var c = String(l.item_code || "").toUpperCase().replace(/[^A-Z0-9.\/]/g, "");
+    return "Q-" + (c.length >= 3 ? c : String(l.description || "ITEM").toUpperCase().replace(/[^A-Z0-9.#\/]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60));
+  }
+  function openAddItemsSheet(inv, lineNo) {
+    var saved = store.get("invPL", {})[inv.id] || {};
+    var sup = saved.supplier || inv.supplier || "", job = saved.job != null ? saved.job : guessInvoiceJob(inv);
+    var rows = priceListCheck(inv, sup, job).filter(function (r) { return r.status === "unknown" && (lineNo == null || String(r.line.line) === String(lineNo)); });
+    if (!rows.length) return;
+    var admin = isAdmin(), units = CAT.units.slice().sort();
+    var h = "<h2>" + (admin ? "Add to our pricing" : "Ask an admin to add") + "</h2>" +
+      '<datalist id="ai-cats"><option value="Added Items">' + CAT.categories.slice().sort().map(function (c) { return '<option value="' + esc(c) + '">'; }).join("") + "</datalist>" +
+      '<p class="hint" style="margin-top:0">Supplier: <b>' + esc(sup) + "</b>. Check the name, part #, unit and price before saving.</p>";
+    if (admin) {
+      h += '<div class="field"><span>Add to</span>' +
+        '<label class="toggle"><input type="radio" name="ai-to" value="day" checked>Day-to-day price list (every job)</label>' +
+        '<label class="toggle"><input type="radio" name="ai-to" value="job">Job special pricing only</label>' +
+        '<label class="toggle"><input type="radio" name="ai-to" value="both">Both</label></div>' +
+        '<div id="ai-jobbox" hidden><div class="filters"><label class="field"><span>Job #</span><input class="input" id="ai-job" value="' + esc(job) + '" placeholder="e.g. 3425"></label>' +
+        '<label class="field"><span>Price book</span><select class="input" id="ai-book"></select></label></div></div>';
+    } else {
+      h += '<p class="hint">An admin reviews these under Price-list Requests before they are added.</p>';
+    }
+    h += rows.map(function (r, i) {
+      var l = r.line;
+      return '<div class="card ai-row" data-i="' + i + '" style="padding:10px 12px;margin:8px 0">' +
+        '<label class="toggle" style="margin:0 0 6px"><input type="checkbox" data-f="on" checked><b>' + esc(l.description) + "</b></label>" +
+        '<label class="field"><span>Item name</span><input class="input" data-f="name" value="' + esc(l.description) + '"></label>' +
+        '<div class="filters"><label class="field"><span>Part #</span><input class="input" data-f="model" value="' + esc(l.item_code || "") + '"></label>' +
+        '<label class="field"><span>Unit</span><select class="input" data-f="unit">' + units.map(function (u) { return "<option" + (u === plUnitFor(l.unit) ? " selected" : "") + ">" + esc(u) + "</option>"; }).join("") + "</select></label>" +
+        '<label class="field"><span>Price</span><input class="input" data-f="price" type="number" inputmode="decimal" min="0" step="any" value="' + (l.unit_price != null ? esc(l.unit_price) : "") + '"></label>' +
+        (admin ? '<label class="field ai-cat"><span>Category</span><input class="input" data-f="category" list="ai-cats" value="Added Items"></label>' : "") + "</div></div>";
+    }).join("") +
+      '<div class="error-text" id="ai-err" hidden></div>' +
+      '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ai-save">' + (admin ? "Save" : "Send to admin") + "</button></div>";
+    openSheet(h, function (sheet) {
+      function target() { var el = sheet.querySelector('input[name="ai-to"]:checked'); return el ? el.value : "day"; }
+      function books(j) {
+        var k = jobKey(j);
+        return getBooks().filter(function (b) { return b.supplier === sup && k && bookJobs(b).indexOf(k) >= 0; });
+      }
+      function fillBooks() {
+        var sel = sheet.querySelector("#ai-book");
+        if (!sel) return;
+        var j = sheet.querySelector("#ai-job").value.trim(), bs = books(j);
+        sel.innerHTML = bs.map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.name || b.supplier + " job pricing") + (b.active ? "" : " (off)") + "</option>"; }).join("") +
+          '<option value="">New book: ' + esc(sup) + " items from invoices</option>";
+      }
+      function sync() {
+        var t = target(), box = sheet.querySelector("#ai-jobbox");
+        if (box) box.hidden = t === "day";
+        sheet.querySelectorAll(".ai-cat").forEach(function (el) { el.hidden = t === "job"; });
+      }
+      sheet.querySelectorAll('input[name="ai-to"]').forEach(function (el) { el.addEventListener("change", sync); });
+      var jobIn = sheet.querySelector("#ai-job");
+      if (jobIn) jobIn.addEventListener("input", fillBooks);
+      fillBooks(); sync();
+      sheet.querySelector("#ai-save").addEventListener("click", function (e) {
+        var err = sheet.querySelector("#ai-err"), t = target(), j = jobIn ? jobIn.value.trim() : job;
+        var picks = [];
+        sheet.querySelectorAll(".ai-row").forEach(function (card) {
+          var v = {}; card.querySelectorAll("[data-f]").forEach(function (el) { v[el.getAttribute("data-f")] = el.type === "checkbox" ? el.checked : el.value.trim(); });
+          if (!v.on) return;
+          v.price = parseFloat(v.price) || 0; v.line = rows[+card.getAttribute("data-i")].line; v.supplier = sup;
+          picks.push(v);
+        });
+        function fail(m) { err.textContent = m; err.hidden = false; }
+        if (!picks.length) return fail("Tick at least one item.");
+        if (picks.some(function (v) { return !v.name; })) return fail("Every item needs a name.");
+        if (admin && t !== "day" && !j) return fail("Enter the job # for special pricing.");
+        if (admin && t !== "day" && picks.some(function (v) { return !(v.price > 0); })) return fail("Special pricing needs a price for every item.");
+        if (!navigator.onLine) return fail("Connect to the internet to save.");
+        err.hidden = true; e.target.disabled = true;
+        var done;
+        if (!admin) {
+          done = Promise.all(picks.map(function (v) {
+            return Cloud.submitCatalogRequest({ supplier: sup, name: v.name, model: v.model, unit: v.unit, price: v.price, job_number: j || null, order_id: inv.order_id || null });
+          })).then(function () { return picks.length + " request" + (picks.length === 1 ? "" : "s") + " sent to the admin"; });
+        } else {
+          done = (t === "job" ? Promise.resolve(null) : Cloud.addCatalogItems(picks)).then(function (ids) {
+            if (t === "day") return null;
+            var bookId = sheet.querySelector("#ai-book").value;
+            return (bookId ? Promise.resolve(bookId) : Cloud.saveBook({ job_number: j, supplier: sup, name: sup + " items from invoices", active: true })).then(function (id) {
+              return Cloud.upsertBookItems(id, picks.map(function (v, i) {
+                return { item_key: sup + "|" + (ids ? ids[i] : quoteKey({ item_code: v.model, description: v.name })), item_name: v.name, unit: v.unit, price: +v.price.toFixed(4) };
+              }));
+            });
+          }).then(function () {
+            return Promise.all([refreshCatalog(), t === "day" ? null : refreshBooks()]);
+          }).then(function () {
+            if (t !== "day") { var m = store.get("invPL", {}); m[inv.id] = { supplier: sup, job: j }; store.set("invPL", m); }
+            var n = picks.length + " item" + (picks.length === 1 ? "" : "s");
+            return t === "day" ? n + " added to the day-to-day price list" : t === "job" ? n + " added to Job " + j + " special pricing" : n + " added to the price list and Job " + j + " special pricing";
+          });
+        }
+        done.then(function (msg) { closeSheet(); toast(msg); var y = window.scrollY; render(); window.scrollTo(0, y); },
+          function (ex) { e.target.disabled = false; fail(ex.message || "Couldn't save"); });
+      });
+    });
   }
 
   // Reject: optionally email the supplier (subject "Incorrect invoice <#>", our order PDF when there is one + their invoice),
@@ -3313,6 +3428,7 @@
         .then(refreshInvoices).then(function () { toast("Invoice approved"); state.invFilter = "attention"; go("invoices"); }, function (e) { toast(e.message); });
     },
     "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
+    "inv-add-items": function (el) { openAddItemsSheet(currentInvoice(), el.getAttribute("data-line")); },
     "inv-pricelist": function () { state.invPLOpen = currentInvoice().id; render(); },
     "inv-stop": function () {
       var inv = currentInvoice();

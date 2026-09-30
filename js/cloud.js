@@ -356,6 +356,15 @@
     }).then(function () { return id; });
   };
 
+  // Admin adds items straight to the day-to-day price list (e.g. from an invoice). Returns the new ids in order.
+  Cloud.addCatalogItems = function (items) {
+    var rows = items.map(function (it) {
+      return { id: "KIM-" + Math.random().toString(36).slice(2, 8).toUpperCase(), supplier: it.supplier, name: it.name, model: it.model || null,
+        unit: it.unit || "EA", category: it.category || "Added Items", price: it.price > 0 ? it.price : 0 };
+    });
+    return client.from("catalog_items").insert(rows).then(must).then(function () { return rows.map(function (r) { return r.id; }); });
+  };
+
   Cloud.updateCatalogItem = function (id, f) {
     return client.from("catalog_items").update({
       name: f.name, model: f.model || null, unit: f.unit || "EA", category: f.category || "Added Items",
