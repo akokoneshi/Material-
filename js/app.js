@@ -2555,9 +2555,11 @@
     approved: ["done", "Approved"],
     sent_back: ["sent", "Rejected / sent back"]
   };
+  // Checked before lower prices counted as fine: a "mismatch" whose only differences are lower prices matches.
+  function invStatus(i) { return i.status === "mismatch" && i.comparison && !invIssues(i).length ? "matched" : i.status; }
   var INV_FILTERS = [
-    ["attention", "Needs review", function (i) { return i.status === "mismatch" || i.status === "no_order" || i.status === "error"; }],
-    ["matched", "Matches order", function (i) { return i.status === "matched"; }],
+    ["attention", "Needs review", function (i) { var st = invStatus(i); return st === "mismatch" || st === "no_order" || st === "error"; }],
+    ["matched", "Matches order", function (i) { return invStatus(i) === "matched"; }],
     ["processing", "Checking", function (i) { return i.status === "processing"; }],
     ["approved", "Approved", function (i) { return i.status === "approved"; }],
     ["sent_back", "Rejected", function (i) { return i.status === "sent_back"; }],
@@ -2623,11 +2625,12 @@
     if (!list.length) h += '<div class="empty">' + (all.length ? "Nothing here." : "No invoices uploaded yet.") + "</div>";
     else {
       h += '<div class="tile-list">' + list.map(function (i) {
-        return '<button class="tile inv-tile ' + i.status + '" data-action="open-invoice" data-id="' + esc(i.id) + '"><div class="t-main">' +
+        var st = invStatus(i), nBad = i.comparison ? invIssues(i).length : i.mismatch_count;
+        return '<button class="tile inv-tile ' + st + '" data-action="open-invoice" data-id="' + esc(i.id) + '"><div class="t-main">' +
           '<div class="t-title">' + esc(i.vendor_name || i.supplier || i.file_name || "Invoice") + (i.invoice_number ? " · #" + esc(i.invoice_number) : "") + "</div>" +
           '<div class="t-sub">' + (i.order_number ? "Order " + esc(i.order_number) : i.status === "processing" ? "Reading invoice…" : "No order matched") +
           (i.total != null ? " · " + fmtMoney(i.total) : "") + "</div>" +
-          '<div class="t-sub">' + invBadge(i.status) + (i.mismatch_count ? ' <b class="neg">' + i.mismatch_count + " line" + (i.mismatch_count === 1 ? "" : "s") + " flagged</b>" : "") +
+          '<div class="t-sub">' + invBadge(st) + (nBad ? ' <b class="neg">' + nBad + " line" + (nBad === 1 ? "" : "s") + " flagged</b>" : "") +
           " · " + esc(fmtDate(i.created_at)) + "</div></div><span class=\"chev\">›</span></button>";
       }).join("") + "</div>";
     }
@@ -2655,11 +2658,11 @@
   VIEWS.invoice = function () {
     var inv = currentInvoice();
     if (!inv) return VIEWS.invoices();
-    var ex = inv.extracted || {}, cmp = inv.comparison || {}, rows = cmp.rows || [];
+    var ex = inv.extracted || {}, cmp = inv.comparison || {}, rows = invCompareRows(inv);
     var order = orderForInvoice(inv);
     var h = topbar(inv.invoice_number ? "Invoice #" + inv.invoice_number : "Invoice", inv.vendor_name || inv.supplier || inv.file_name || "", backBtn("invoices", "Invoices"));
     h += '<main class="page">';
-    h += '<div class="card inv-head ' + inv.status + '">' + invBadge(inv.status) +
+    h += '<div class="card inv-head ' + invStatus(inv) + '">' + invBadge(invStatus(inv)) +
       (inv.status === "processing" ? (invStalled(inv) ? '<div class="error-text">This check is taking too long and probably stopped. Tap Re-run AI check below.</div>'
         : '<p class="hint" style="margin:8px 0 0">The AI is reading this invoice. This page updates by itself.</p>') : "") +
       (inv.status !== "error" && inv.status !== "processing" && inv.error ? '<p class="hint" style="margin:8px 0 0">' + esc(inv.error) + "</p>" : "") +
@@ -2694,11 +2697,12 @@
 
     // comparison
     if (rows.length) {
-      var bad = rows.filter(function (r) { return r.status === "price" || r.status === "not_on_order"; });
+      var bad = rows.filter(function (r) { return r.status === "price" || r.status === "not_on_order"; }), under = rows.filter(function (r) { return r.status === "under"; });
+      var underTxt = underSummary(under, function (r) { return r.price_diff; }, function (r) { return r.inv_qty; });
       h += "<h3>Line by line</h3>";
-      h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + " line" + (bad.length === 1 ? "" : "s") + " don't match the order:</b><br>" +
-        bad.map(function (r) { return "• " + esc(r.description) + " - " + (r.status === "price" ? "billed " + fmtMoney(r.inv_price) + " vs order " + fmtMoney(r.ord_price) : "not on the order"); }).join("<br>") + "</div>"
-        : '<div class="notice ok-notice">Every billed line matches the order pricing.</div>';
+      h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + (bad.length === 1 ? " line doesn't" : " lines don't") + " match the order:</b><br>" +
+        bad.map(function (r) { return "• " + esc(r.description) + " - " + (r.status === "price" ? "billed " + fmtMoney(r.inv_price) + " vs order " + fmtMoney(r.ord_price) : "not on the order"); }).join("<br>") + underTxt + "</div>"
+        : '<div class="notice ok-notice">Every billed line matches ' + (under.length ? "or is below " : "") + "the order pricing." + underTxt + "</div>";
       var ign = (cmp.ignored || []).filter(function (c) { return c.amount; });
       if (ign.length) h += '<p class="hint">Not checked against the order: ' + ign.map(function (c) { return esc(c.description) + " " + fmtMoney(c.amount); }).join(", ") + ".</p>";
       h += '<div class="inv-lines">' + rows.map(invRowHtml).join("") + "</div>";
@@ -2755,14 +2759,32 @@
     }).join("") + '</select><button class="btn primary block" style="margin-top:10px" id="inv-use-order" data-action="inv-use-order" disabled>Compare with this order</button>';
   }
 
+  // Comparison rows, with lines billed below the order price as "under" (green, noted) - also for invoices checked earlier.
+  function invCompareRows(inv) {
+    return ((inv.comparison || {}).rows || []).map(function (r) {
+      return r.status === "price" && r.price_diff < 0 ? Object.assign({}, r, { status: "under" }) : r;
+    });
+  }
+  function invIssues(inv) { return invCompareRows(inv).filter(function (r) { return r.status === "price" || r.status === "not_on_order"; }); }
+  // "Billed $0.25 / LF less (about $12.50 less in total)"
+  function lowerNote(diff, qty, unit, what) {
+    var tot = qty ? round2(-diff * qty) : 0;
+    return "Billed " + fmtMoney(-diff) + (unit ? " / " + unit : "") + " less than " + what + (tot >= 0.01 ? " (about " + fmtMoney(tot) + " less in total)" : "") + ".";
+  }
+  function underSummary(list, diffOf, qtyOf) {
+    if (!list.length) return "";
+    var tot = round2(list.reduce(function (a, r) { var q = qtyOf(r); return a + (q ? -diffOf(r) * q : 0); }, 0));
+    return "<br>" + list.length + " line" + (list.length === 1 ? " is" : "s are") + " billed below our price" + (tot >= 0.01 ? ", about " + fmtMoney(tot) + " less in total" : "") + ".";
+  }
   function invRowHtml(r) {
-    var cls = { ok: "ok", price: "bad", not_on_order: "bad", not_invoiced: "info", no_price: "info" }[r.status] || "";
-    var label = { ok: "Matches", price: "Price differs", not_on_order: "Not on order", not_invoiced: "Ordered, not billed", no_price: "No price on invoice" }[r.status] || r.status;
+    var cls = { ok: "ok", under: "ok", price: "bad", not_on_order: "bad", not_invoiced: "info", no_price: "info" }[r.status] || "";
+    var label = { ok: "Matches", under: "Lower than order", price: "Price differs", not_on_order: "Not on order", not_invoiced: "Ordered, not billed", no_price: "No price on invoice" }[r.status] || r.status;
     return '<div class="inv-line ' + cls + '"><div class="il-top"><span class="il-status">' + esc(label) + "</span>" +
       (r.price_diff ? '<span class="il-diff ' + (r.price_diff > 0 ? "neg" : "pos") + '">' + (r.price_diff > 0 ? "+" : "") + fmtMoney(r.price_diff) + " / " + esc(r.unit || "") + "</span>" : "") + "</div>" +
       '<div class="il-name">' + esc(r.description) + (r.code ? ' <span class="hint">#' + esc(r.code) + "</span>" : "") + "</div>" +
       '<div class="il-grid"><div><small>Invoice</small>' + (r.inv_qty != null ? esc(fmtQty(r.inv_qty)) + " × " : "") + (r.inv_price != null ? fmtMoney(r.inv_price) : "-") + "</div>" +
       "<div><small>Order" + (r.job_price ? ' <span class="job-price">Job price</span>' : "") + "</small>" + (r.ord_qty != null ? esc(fmtQty(r.ord_qty)) + " × " : "") + (r.ord_price != null ? fmtMoney(r.ord_price) : "-") + "</div></div>" +
+      (r.status === "under" ? '<div class="hint pos" style="margin:4px 0 0">' + esc(lowerNote(r.price_diff, r.inv_qty, r.unit, "the order")) + "</div>" : "") +
       (r.qty_note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.qty_note) + "</div>" : "") +
       (r.matched_by === "agent" ? '<div class="hint" style="margin:4px 0 0">Matched by the AI from the description</div>' : "") + "</div>";
   }
@@ -2807,11 +2829,11 @@
         else if (!(p.price > 0)) row.status = "no_list";
         else {
           row.diff = Math.round((l.unit_price - p.price) * 10000) / 10000;
-          row.status = Math.abs(l.unit_price - p.price) > Math.max(0.01, p.price * 0.002) ? "price" : "ok";
+          row.status = Math.abs(l.unit_price - p.price) > Math.max(0.01, p.price * 0.002) ? (l.unit_price < p.price ? "under" : "price") : "ok";
         }
         if (l.unit && it.unit && plUnit(l.unit) !== plUnit(it.unit)) {
           row.note = "Units differ: invoice " + l.unit + ", price list " + it.unit + ". Check the price per unit.";
-          if (row.status === "price") row.status = "check";
+          if (row.status === "price" || row.status === "under") row.status = "check";
         }
         return row;
       });
@@ -2835,21 +2857,24 @@
       '<label class="field"><span>Job # (for job pricing)</span><input class="input" id="pl-job" value="' + esc(job) + '" placeholder="optional"></label></div>';
     if (!sup) return h + '<p class="hint">Pick the supplier to check prices.</p></div>';
     var rows = priceListCheck(inv, sup, job);
-    var bad = rows.filter(function (r) { return r.status === "price"; }), unk = rows.filter(function (r) { return r.status === "unknown"; });
+    var bad = rows.filter(function (r) { return r.status === "price"; }), unk = rows.filter(function (r) { return r.status === "unknown"; }),
+      under = rows.filter(function (r) { return r.status === "under"; });
+    var underTxt = underSummary(under, function (r) { return r.diff; }, function (r) { return r.line.quantity; });
     var over = bad.reduce(function (a, r) { return a + (r.diff > 0 && r.line.quantity ? r.diff * r.line.quantity : 0); }, 0);
     h += bad.length ? '<div class="notice bad-notice"><b>' + bad.length + " line" + (bad.length === 1 ? "" : "s") + " billed at a different price than " + (job ? "the job / price list" : "the price list") + "</b>" +
-      (over > 0.005 ? "<br>Overbilled by about " + fmtMoney(round2(over)) + " in total." : "") + "</div>"
-      : '<div class="notice ok-notice">Every line found in the price list is billed at the listed price.</div>';
+      (over > 0.005 ? "<br>Overbilled by about " + fmtMoney(round2(over)) + " in total." : "") + underTxt + "</div>"
+      : '<div class="notice ok-notice">Every line found in the price list is billed at ' + (under.length ? "or below " : "") + "the listed price." + underTxt + "</div>";
     if (unk.length) h += '<p class="hint">' + unk.length + " line" + (unk.length === 1 ? " isn't" : "s aren't") + " in our price list for " + esc(sup) + " and couldn't be checked.</p>";
     h += '<div class="inv-lines">' + rows.map(function (r) {
-      var cls = { ok: "ok", price: "bad", check: "bad", unknown: "info", no_list: "info", no_price: "info" }[r.status];
-      var label = { ok: "Matches list", price: "Price differs", check: "Check units", unknown: "Not in price list", no_list: "No list price", no_price: "No price on invoice" }[r.status];
+      var cls = { ok: "ok", under: "ok", price: "bad", check: "bad", unknown: "info", no_list: "info", no_price: "info" }[r.status];
+      var label = { ok: "Matches list", under: r.special ? "Lower than job price" : "Lower than list", price: "Price differs", check: "Check units", unknown: "Not in price list", no_list: "No list price", no_price: "No price on invoice" }[r.status];
       var l = r.line;
       return '<div class="inv-line ' + cls + '"><div class="il-top"><span class="il-status">' + label + "</span>" +
         (r.diff && r.status !== "ok" ? '<span class="il-diff ' + (r.diff > 0 ? "neg" : "pos") + '">' + (r.diff > 0 ? "+" : "") + fmtMoney(r.diff) + " / " + esc(l.unit || "") + "</span>" : "") + "</div>" +
         '<div class="il-name">' + esc(l.description) + (l.item_code ? ' <span class="hint">#' + esc(l.item_code) + "</span>" : "") + "</div>" +
         '<div class="il-grid"><div><small>Invoice</small>' + (l.quantity != null ? esc(fmtQty(l.quantity)) + " × " : "") + (l.unit_price != null ? fmtMoney(l.unit_price) : "-") + "</div>" +
         "<div><small>" + (r.special ? '<span class="job-price">Job price</span>' : "Price list") + "</small>" + (r.list != null ? fmtMoney(r.list) + (r.it ? " / " + esc(r.it.unit) : "") : "-") + "</div></div>" +
+        (r.status === "under" ? '<div class="hint pos" style="margin:4px 0 0">' + esc(lowerNote(r.diff, l.quantity, r.it.unit, r.special ? "the job price" : "the price list")) + "</div>" : "") +
         (r.it ? '<div class="hint" style="margin:4px 0 0">' + plSourceText(r, sup, job) + "</div>" : "") +
         (r.note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.note) + "</div>" : "") +
         (r.it && isAdmin() && !r.it.jobOnly ? '<button class="btn small" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(r.it.key) + '">Edit product</button>' : "") + "</div>";
@@ -2860,7 +2885,7 @@
   // Reject: optionally email the supplier (subject "Incorrect invoice <#>", our order PDF when there is one + their invoice),
   // then mark the invoice rejected. Works without an order: the price-list check supplies the lines that are wrong.
   function rejectLines(inv, order) {
-    if (order) return ((inv.comparison || {}).rows || []).filter(function (r) { return r.status === "price" || r.status === "not_on_order"; }).map(function (r) {
+    if (order) return invIssues(inv).map(function (r) {
       return "- " + r.description + (r.code ? " [#" + r.code + "]" : "") + ": " + (r.status === "price"
         ? "invoiced at " + fmtMoney(r.inv_price) + "/" + (r.unit || "unit") + ", our order price is " + fmtMoney(r.ord_price)
         : "not on our order");
@@ -3282,9 +3307,10 @@
     },
     "inv-approve": function () {
       var inv = currentInvoice();
-      if (inv.mismatch_count && !confirm(inv.mismatch_count + " line(s) don't match the order. Approve anyway?")) return;
+      var n = invIssues(inv).length;
+      if (n && !confirm(n + " line(s) don't match the order. Approve anyway?")) return;
       Cloud.updateInvoice(inv.id, { status: "approved", reviewed_by: Cloud.user.email, reviewed_at: new Date().toISOString() })
-        .then(refreshInvoices).then(function () { toast("Invoice approved"); render(); }, function (e) { toast(e.message); });
+        .then(refreshInvoices).then(function () { toast("Invoice approved"); state.invFilter = "attention"; go("invoices"); }, function (e) { toast(e.message); });
     },
     "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
     "inv-pricelist": function () { state.invPLOpen = currentInvoice().id; render(); },

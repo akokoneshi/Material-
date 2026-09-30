@@ -191,7 +191,8 @@ export type CompareRow = {
   inv_price: number | null;
   ord_price: number | null;
   price_diff: number | null;
-  status: "ok" | "price" | "not_on_order" | "not_invoiced" | "no_price";
+  // "under": billed below the order price. Not a problem, only noted.
+  status: "ok" | "under" | "price" | "not_on_order" | "not_invoiced" | "no_price";
   qty_note: string | null;
   job_price: boolean;
   matched_by: "code" | "agent" | null;
@@ -275,7 +276,7 @@ export function compare(ex: Extracted, order: Order, agentPairs: { invoice_line:
       if (b != null && Math.abs(b - o.qty) > 1e-6) qtyNote = qtyText(b, o.qty);
     }
     const diff = l.unit_price == null ? null : Math.round((l.unit_price - o.price) * 10000) / 10000;
-    const status = l.unit_price == null ? "no_price" : o.price > 0 && priceMismatch(l.unit_price, o.price) ? "price" : "ok";
+    const status = l.unit_price == null ? "no_price" : o.price > 0 && priceMismatch(l.unit_price, o.price) ? (l.unit_price < o.price ? "under" : "price") : "ok";
     return { ...base, ord_qty: o.qty, ord_price: o.price, price_diff: diff, status, qty_note: qtyNote,
       matched_by: codeKey(l.item_code) === codeKey(o.model) && codeKey(o.model).length >= 4 ? "code" : "agent" } as CompareRow;
   });
