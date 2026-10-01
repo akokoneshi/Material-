@@ -3052,7 +3052,7 @@
         var note = [reason ? "Rejected: " + reason : "", emailed ? "" : "(not emailed)"].filter(Boolean).join(" ");
         if (note) patch.notes = (inv.notes ? inv.notes + "\n" : "") + note;
         closeSheet();
-        Cloud.updateInvoice(inv.id, patch).then(refreshInvoices).then(function () { toast("Invoice rejected"); render(); }, function (e) { toast(e.message); });
+        Cloud.updateInvoice(inv.id, patch).then(refreshInvoices).then(function () { toast("Invoice rejected"); state.invFilter = "attention"; go("invoices"); }, function (e) { toast(e.message); });
       }
       function done() {
         if (!confirm("Did you send the email? Mark this invoice as rejected?")) { closeSheet(); return; }
