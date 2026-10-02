@@ -176,6 +176,11 @@ from the invoice (one line, or all of them at once). Admins choose **Day-to-day 
 only** (a book for that job; a new "<supplier> items from invoices" book is made if the job has none), or **Both**, and can fix
 the name, part #, unit, price and category first. Invoice reviewers who aren't admins send them as price-list requests instead.
 
+After **Approve** or **Reject**, the next invoice waiting for review opens automatically.
+The **Approved**, **Rejected** and **All** tabs sort by **Supplier** (grouped, newest invoice date first) or by **Date**.
+**Select for PDF** lets you tick invoices (or a whole supplier) and download their uploaded files as **one combined PDF**,
+in list order; photos become a page each (pdf-lib, `js/vendor/pdf-lib.min.js`, MIT).
+
 Who can see invoices: admins, and people given **Can review invoices** in Users & Permissions.
 
 **One-time setup**

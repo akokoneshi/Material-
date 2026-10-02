@@ -2620,19 +2620,26 @@
       var n = all.filter(x[2]).length;
       return '<button class="chip' + (f === x[0] ? " on" : "") + '" data-action="inv-filter" data-f="' + x[0] + '">' + esc(x[1]) + (x[0] !== "all" ? " (" + n + ")" : "") + "</button>";
     }).join("") + "</div>";
-    var fn = (INV_FILTERS.filter(function (x) { return x[0] === f; })[0] || INV_FILTERS[5])[2];
-    var list = all.filter(fn);
+    var list = invListFor(f), sel = state.invSel, groups = invGroups(f, list);
+    if (list.length && f !== "processing") {
+      h += '<div class="inv-tools">' + (invSortable(f) ? '<span class="hint" style="margin:0">Sort:</span>' +
+        '<button class="chip' + (invSortMode() === "supplier" ? " on" : "") + '" data-action="inv-sort" data-s="supplier">Supplier</button>' +
+        '<button class="chip' + (invSortMode() === "date" ? " on" : "") + '" data-action="inv-sort" data-s="date">Date</button>' : "") +
+        '<button class="chip" style="margin-left:auto" data-action="inv-select">' + (sel ? "Cancel selecting" : "Select for PDF") + "</button></div>";
+    }
     if (!list.length) h += '<div class="empty">' + (all.length ? "Nothing here." : "No invoices uploaded yet.") + "</div>";
     else {
-      h += '<div class="tile-list">' + list.map(function (i) {
-        var st = invStatus(i), nBad = i.comparison ? invIssues(i).length : i.mismatch_count;
-        return '<button class="tile inv-tile ' + st + '" data-action="open-invoice" data-id="' + esc(i.id) + '"><div class="t-main">' +
-          '<div class="t-title">' + esc(i.vendor_name || i.supplier || i.file_name || "Invoice") + (i.invoice_number ? " · #" + esc(i.invoice_number) : "") + "</div>" +
-          '<div class="t-sub">' + (i.order_number ? "Order " + esc(i.order_number) : i.status === "processing" ? "Reading invoice…" : "No order matched") +
-          (i.total != null ? " · " + fmtMoney(i.total) : "") + "</div>" +
-          '<div class="t-sub">' + invBadge(st) + (nBad ? ' <b class="neg">' + nBad + " line" + (nBad === 1 ? "" : "s") + " flagged</b>" : "") +
-          " · " + esc(fmtDate(i.created_at)) + "</div></div><span class=\"chev\">›</span></button>";
-      }).join("") + "</div>";
+      h += groups.map(function (g) {
+        return (g.name ? '<div class="inv-group"><b>' + esc(g.name) + "</b> <span class=\"hint\" style=\"margin:0\">(" + g.items.length + ")</span>" +
+          (sel ? '<button class="btn small" data-action="inv-sel-group" data-g="' + esc(g.name) + '">' + (g.items.every(function (i) { return sel[i.id]; }) ? "Unselect" : "Select all") + "</button>" : "") + "</div>" : "") +
+          '<div class="tile-list">' + g.items.map(invTileHtml).join("") + "</div>";
+      }).join("");
+    }
+    if (sel) {
+      var n = list.filter(function (i) { return sel[i.id]; }).length;
+      h += '<div class="inv-selbar"><span><b>' + n + "</b> selected</span>" +
+        '<button class="btn small" data-action="inv-sel-all">' + (n === list.length ? "Clear" : "Select all") + "</button>" +
+        '<button class="btn primary small" data-action="inv-export-pdf"' + (n ? "" : " disabled") + ">Combined PDF</button></div>";
     }
     return h + "</main>";
   };
@@ -2675,6 +2682,83 @@
       state.invPLOpen = null;
       go("invoice", { invoiceId: next.id });
     };
+  }
+  // ----- invoice list: sorting (supplier / date) and selecting invoices for one combined PDF
+  function invDateMs(i) {
+    var d = String(i.invoice_date || "").trim(), m;
+    if ((m = d.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/))) return new Date(+m[3] < 100 ? 2000 + +m[3] : +m[3], m[1] - 1, +m[2]).getTime();
+    if ((m = d.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return new Date(+m[1], m[2] - 1, +m[3]).getTime();
+    var t = Date.parse(d);
+    return isNaN(t) ? new Date(i.created_at).getTime() : t;
+  }
+  function invSupplierName(i) { return i.supplier || i.vendor_name || "Unknown supplier"; }
+  function invSortable(f) { return f === "approved" || f === "sent_back" || f === "all"; }
+  function invSortMode() { return store.get("invSort", "supplier"); }
+  function invListFor(f) {
+    var fn = (INV_FILTERS.filter(function (x) { return x[0] === f; })[0] || INV_FILTERS[5])[2], list = getInvoices().filter(fn);
+    if (!invSortable(f)) return list;
+    var byDate = function (a, b) { return invDateMs(b) - invDateMs(a) || (a.created_at < b.created_at ? 1 : -1); };
+    return list.slice().sort(invSortMode() === "date" ? byDate : function (a, b) {
+      return invSupplierName(a).localeCompare(invSupplierName(b)) || byDate(a, b);
+    });
+  }
+  function invGroups(f, list) {
+    if (!invSortable(f) || invSortMode() !== "supplier") return [{ name: "", items: list }];
+    var out = [];
+    list.forEach(function (i) { var n = invSupplierName(i); if (!out.length || out[out.length - 1].name !== n) out.push({ name: n, items: [] }); out[out.length - 1].items.push(i); });
+    return out;
+  }
+  function invTileHtml(i) {
+    var st = invStatus(i), nBad = i.comparison ? invIssues(i).length : i.mismatch_count, sel = state.invSel;
+    return '<button class="tile inv-tile ' + st + (sel && sel[i.id] ? " picked" : "") + '" data-action="' + (sel ? "inv-toggle-sel" : "open-invoice") + '" data-id="' + esc(i.id) + '">' +
+      (sel ? '<span class="inv-check" aria-hidden="true">' + (sel[i.id] ? "✓" : "") + "</span>" : "") + '<div class="t-main">' +
+      '<div class="t-title">' + esc(i.vendor_name || i.supplier || i.file_name || "Invoice") + (i.invoice_number ? " · #" + esc(i.invoice_number) : "") + "</div>" +
+      '<div class="t-sub">' + (i.invoice_date ? "Invoice date " + esc(i.invoice_date) + " · " : "") + (i.order_number ? "Order " + esc(i.order_number) : i.status === "processing" ? "Reading invoice…" : "No order matched") +
+      (i.total != null ? " · " + fmtMoney(i.total) : "") + "</div>" +
+      '<div class="t-sub">' + invBadge(st) + (nBad ? ' <b class="neg">' + nBad + " line" + (nBad === 1 ? "" : "s") + " flagged</b>" : "") +
+      " · " + esc(fmtDate(i.created_at)) + "</div></div>" + (sel ? "" : '<span class="chev">›</span>') + "</button>";
+  }
+  // One PDF with every selected invoice's uploaded file, in list order. PDFs are copied page by page; photos become a page each.
+  function imageToJpeg(blob) {
+    return new Promise(function (res, rej) {
+      var img = new Image(), url = URL.createObjectURL(blob);
+      img.onload = function () {
+        var k = Math.min(1, 2200 / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement("canvas");
+        c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+        var g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { b ? b.arrayBuffer().then(res, rej) : rej(new Error("couldn't convert the photo")); }, "image/jpeg", 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error("this photo format can't be opened here")); };
+      img.src = url;
+    });
+  }
+  function exportInvoicesPdf(list) {
+    var skipped = [];
+    return (window.PDFLib ? Promise.resolve() : loadScript("js/vendor/pdf-lib.min.js")).then(function () {
+      var L = window.PDFLib;
+      return L.PDFDocument.create().then(function (out) {
+        var chain = Promise.resolve();
+        list.forEach(function (inv) {
+          var label = invSupplierName(inv) + (inv.invoice_number ? " #" + inv.invoice_number : " (" + (inv.file_name || "invoice") + ")");
+          chain = chain.then(function () { return Cloud.downloadInvoiceFile(inv.file_path); }).then(function (blob) {
+            var type = inv.file_type || blob.type || "", pdf = isPdf(type) || isPdf(inv.file_name || "") || isPdf(inv.file_path || "");
+            if (pdf) return blob.arrayBuffer().then(function (buf) { return L.PDFDocument.load(buf, { ignoreEncryption: true }); }).then(function (src) {
+              return out.copyPages(src, src.getPageIndices()).then(function (pages) { pages.forEach(function (pg) { out.addPage(pg); }); });
+            });
+            return imageToJpeg(blob).then(function (buf) { return out.embedJpg(buf); }).then(function (img) {
+              var land = img.width > img.height, W = land ? 792 : 612, H = land ? 612 : 792, m = 18;
+              var k = Math.min((W - 2 * m) / img.width, (H - 2 * m) / img.height), w = img.width * k, hh = img.height * k;
+              out.addPage([W, H]).drawImage(img, { x: (W - w) / 2, y: (H - hh) / 2, width: w, height: hh });
+            });
+          }).then(null, function (e) { skipped.push(label + ": " + (e && e.message || "couldn't be read")); });
+        });
+        return chain.then(function () {
+          if (!out.getPageCount()) throw new Error("None of the selected invoice files could be read." + (skipped.length ? "\n" + skipped.join("\n") : ""));
+          return out.save();
+        });
+      });
+    }).then(function (bytes) { return { blob: new Blob([bytes], { type: "application/pdf" }), skipped: skipped }; });
   }
   function orderForInvoice(inv) { return inv && inv.order_id ? getOrder(inv.order_id) : null; }
 
@@ -3420,6 +3504,38 @@
     "invoices": function () { go("invoices"); refreshInvoices().then(function () { if (state.view === "invoices") render(); }); },
     "inv-upload": function () { document.getElementById("inv-file").click(); },
     "inv-filter": function (el) { state.invFilter = el.getAttribute("data-f"); render(); },
+    "inv-sort": function (el) { store.set("invSort", el.getAttribute("data-s")); render(); },
+    "inv-select": function () { state.invSel = state.invSel ? null : {}; render(); },
+    "inv-toggle-sel": function (el) { var id = el.getAttribute("data-id"); if (state.invSel[id]) delete state.invSel[id]; else state.invSel[id] = true; var y = window.scrollY; render(); window.scrollTo(0, y); },
+    "inv-sel-group": function (el) {
+      var g = el.getAttribute("data-g"), items = invListFor(state.invFilter || "attention").filter(function (i) { return invSupplierName(i) === g; });
+      var on = !items.every(function (i) { return state.invSel[i.id]; });
+      items.forEach(function (i) { if (on) state.invSel[i.id] = true; else delete state.invSel[i.id]; });
+      var y = window.scrollY; render(); window.scrollTo(0, y);
+    },
+    "inv-sel-all": function () {
+      var list = invListFor(state.invFilter || "attention"), on = !list.every(function (i) { return state.invSel[i.id]; });
+      state.invSel = {}; if (on) list.forEach(function (i) { state.invSel[i.id] = true; });
+      var y = window.scrollY; render(); window.scrollTo(0, y);
+    },
+    "inv-export-pdf": function (el) {
+      var f = state.invFilter || "attention", list = invListFor(f).filter(function (i) { return state.invSel[i.id]; });
+      if (!list.length) return;
+      if (!navigator.onLine) { toast("Connect to the internet to download the invoice files"); return; }
+      el.disabled = true; el.textContent = "Building PDF…";
+      var tabName = { approved: "Approved", sent_back: "Rejected", matched: "Matched", attention: "Needs review", all: "All" }[f] || "Selected";
+      var name = "Invoices - " + tabName + " - " + new Date().toISOString().slice(0, 10) + ".pdf";
+      exportInvoicesPdf(list).then(function (r) {
+        var file = new File([r.blob], name, { type: "application/pdf" });
+        var note = list.length - r.skipped.length + " invoice" + (list.length - r.skipped.length === 1 ? "" : "s") + " in one PDF";
+        if (r.skipped.length) alert("Left out of the PDF:\n" + r.skipped.join("\n"));
+        state.invSel = null; render();
+        if (navigator.canShare && navigator.canShare({ files: [file] }) && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+          navigator.share({ files: [file], title: name }).then(null, function () { downloadBlob(file, name); });
+        } else downloadBlob(file, name);
+        toast(note);
+      }, function (e) { el.disabled = false; el.textContent = "Combined PDF"; alert(e.message || "Couldn't build the PDF"); });
+    },
     "open-invoice": function (el) { go("invoice", { invoiceId: el.getAttribute("data-id") }); },
     "inv-view-file": function () {
       var inv = currentInvoice(), w = window.open("", "_blank");

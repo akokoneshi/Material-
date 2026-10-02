@@ -418,3 +418,16 @@ details summary { cursor: pointer; padding: 6px 0; }
 /* Icons inside titles/tiles never grow past the text size. */
 .t-title svg:not(.ico-inline), .tile .t-main svg:not(.ico-inline) { width: 1.15em; height: 1.15em; vertical-align: -0.2em; margin-right: 4px; flex: none; }
 .pull-alert .t-title svg { color: var(--kim-red); }
+
+/* Invoice list: sort / select for a combined PDF */
+.inv-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -4px 0 12px; }
+.inv-tools .chip { padding: 6px 12px; }
+.inv-group { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font-size: 15px; }
+.inv-group .btn { margin-left: auto; }
+.inv-check { flex: none; width: 24px; height: 24px; border-radius: 6px; border: 2px solid var(--border); display: inline-flex; align-items: center; justify-content: center;
+  margin-right: 10px; font-weight: 800; color: #fff; }
+.tile.picked { border-color: var(--kim-blue); background: #f2f8fd; }
+.tile.picked .inv-check { background: var(--kim-blue); border-color: var(--kim-blue); }
+.inv-selbar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; margin: 14px -16px -16px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -4px 14px rgba(0,0,0,.06); z-index: 5; }
+.inv-selbar span { margin-right: auto; }
