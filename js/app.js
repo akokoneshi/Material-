@@ -2653,6 +2653,29 @@
     pollInvoices();
   };
 
+  // After approving / rejecting: open the next invoice still waiting for a decision, in list order (the tab the reviewer
+  // was working in first, then the other one). Call before the update so the position in the list is known.
+  function nextInvoiceAfter(inv) {
+    var tab = state.invFilter === "matched" ? "matched" : "attention", other = tab === "matched" ? "attention" : "matched";
+    var inTab = function (t) { return (INV_FILTERS.filter(function (x) { return x[0] === t; })[0])[2]; };
+    var before = getInvoices().map(function (i) { return i.id; }), pos = before.indexOf(inv.id);
+    return function (msg) {
+      var all = getInvoices().filter(function (i) { return i.id !== inv.id; });
+      var rank = function (i) { var k = before.indexOf(i.id); return k < 0 ? -1 : k; };
+      var pick = function (t) {
+        var list = all.filter(inTab(t));
+        return list.filter(function (i) { return rank(i) > pos; })[0] || list[0] || null;
+      };
+      var next = pick(tab), t = tab;
+      if (!next) { next = pick(other); t = other; }
+      state.invFilter = next ? t : "attention";
+      if (!next) { toast(msg + ". No more invoices to review."); go("invoices"); return; }
+      var left = all.filter(inTab("attention")).length + all.filter(inTab("matched")).length;
+      toast(msg + ". Next invoice (" + left + " left to review)");
+      state.invPLOpen = null;
+      go("invoice", { invoiceId: next.id });
+    };
+  }
   function orderForInvoice(inv) { return inv && inv.order_id ? getOrder(inv.order_id) : null; }
 
   VIEWS.invoice = function () {
@@ -3052,7 +3075,8 @@
         var note = [reason ? "Rejected: " + reason : "", emailed ? "" : "(not emailed)"].filter(Boolean).join(" ");
         if (note) patch.notes = (inv.notes ? inv.notes + "\n" : "") + note;
         closeSheet();
-        Cloud.updateInvoice(inv.id, patch).then(refreshInvoices).then(function () { toast("Invoice rejected"); state.invFilter = "attention"; go("invoices"); }, function (e) { toast(e.message); });
+        var after = nextInvoiceAfter(inv);
+        Cloud.updateInvoice(inv.id, patch).then(refreshInvoices).then(function () { after("Invoice rejected"); }, function (e) { toast(e.message); });
       }
       function done() {
         if (!confirm("Did you send the email? Mark this invoice as rejected?")) { closeSheet(); return; }
@@ -3424,8 +3448,9 @@
       var inv = currentInvoice();
       var n = invIssues(inv).length;
       if (n && !confirm(n + " line(s) don't match the order. Approve anyway?")) return;
+      var after = nextInvoiceAfter(inv);
       Cloud.updateInvoice(inv.id, { status: "approved", reviewed_by: Cloud.user.email, reviewed_at: new Date().toISOString() })
-        .then(refreshInvoices).then(function () { toast("Invoice approved"); state.invFilter = "attention"; go("invoices"); }, function (e) { toast(e.message); });
+        .then(refreshInvoices).then(function () { after("Invoice approved"); }, function (e) { toast(e.message); });
     },
     "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
     "inv-add-items": function (el) { openAddItemsSheet(currentInvoice(), el.getAttribute("data-line")); },
