@@ -431,3 +431,8 @@ details summary { cursor: pointer; padding: 6px 0; }
 .inv-selbar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; margin: 14px -16px -16px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
   background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -4px 14px rgba(0,0,0,.06); z-index: 5; }
 .inv-selbar span { margin-right: auto; }
+.inv-tools .chip svg { width: 1em; height: 1em; vertical-align: -0.15em; margin-right: 4px; }
+.inv-flt { padding: 12px 14px; margin: 0 0 12px; }
+.inv-flt .filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 10px; }
+.inv-flt .field { min-width: 0; }
+.inv-flt .input { width: 100%; min-width: 0; box-sizing: border-box; }

@@ -2616,18 +2616,23 @@
       '<input type="file" id="inv-file" accept="application/pdf,image/*" multiple hidden>' +
       '<p class="hint">PDF or a photo. The AI reads each invoice, finds the matching order and flags any line whose price doesn\'t match.</p>';
     var all = getInvoices(), f = state.invFilter || "attention";
+    all = all.filter(invMatchesFilter);
     h += '<div class="chips">' + INV_FILTERS.map(function (x) {
       var n = all.filter(x[2]).length;
       return '<button class="chip' + (f === x[0] ? " on" : "") + '" data-action="inv-filter" data-f="' + x[0] + '">' + esc(x[1]) + (x[0] !== "all" ? " (" + n + ")" : "") + "</button>";
     }).join("") + "</div>";
     var list = invListFor(f), sel = state.invSel, groups = invGroups(f, list);
-    if (list.length && f !== "processing") {
-      h += '<div class="inv-tools">' + (invSortable(f) ? '<span class="hint" style="margin:0">Sort:</span>' +
+    var nf = invFilterCount(), fo = state.invFltOpen;
+    if (getInvoices().length && f !== "processing") {
+      h += '<div class="inv-tools">' +
+        '<button class="chip' + (nf ? " on" : "") + '" data-action="inv-flt-toggle">' + ICON.search + (invFlt().supplier && nf === 1 ? esc(invFlt().supplier) : "Filter" + (nf ? " (" + nf + ")" : "")) + "</button>" +
+        (invSortable(f) ? '<span class="hint" style="margin:0">Sort:</span>' +
         '<button class="chip' + (invSortMode() === "supplier" ? " on" : "") + '" data-action="inv-sort" data-s="supplier">Supplier</button>' +
         '<button class="chip' + (invSortMode() === "date" ? " on" : "") + '" data-action="inv-sort" data-s="date">Date</button>' : "") +
-        '<button class="chip" style="margin-left:auto" data-action="inv-select">' + (sel ? "Cancel selecting" : "Select for PDF") + "</button></div>";
+        (list.length ? '<button class="chip" style="margin-left:auto" data-action="inv-select">' + (sel ? "Cancel selecting" : "Select for PDF") + "</button>" : "") + "</div>";
+      if (fo || nf) h += invFilterHtml(fo);
     }
-    if (!list.length) h += '<div class="empty">' + (all.length ? "Nothing here." : "No invoices uploaded yet.") + "</div>";
+    if (!list.length) h += '<div class="empty">' + (nf ? "No invoices match the filter." : all.length ? "Nothing here." : "No invoices uploaded yet.") + "</div>";
     else {
       h += groups.map(function (g) {
         return (g.name ? '<div class="inv-group"><b>' + esc(g.name) + "</b> <span class=\"hint\" style=\"margin:0\">(" + g.items.length + ")</span>" +
@@ -2644,6 +2649,16 @@
     return h + "</main>";
   };
   AFTER.invoices = function () {
+    // Filter fields: apply as you type / pick, keep focus in the search box.
+    [["if-sup", "supplier", "change"], ["if-from", "from", "change"], ["if-to", "to", "change"], ["if-q", "q", "input"]].forEach(function (x) {
+      var el = document.getElementById(x[0]);
+      if (el) el.addEventListener(x[2], function () {
+        invFlt()[x[1]] = el.value.trim();
+        var y = window.scrollY, pos = el.selectionStart; render(); window.scrollTo(0, y);
+        var again = document.getElementById(x[0]);
+        if (x[0] === "if-q" && again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) { /* ignore */ } }
+      });
+    });
     var inp = document.getElementById("inv-file");
     if (inp) inp.addEventListener("change", function () {
       var files = Array.prototype.slice.call(inp.files || []);
@@ -2691,11 +2706,42 @@
     var t = Date.parse(d);
     return isNaN(t) ? new Date(i.created_at).getTime() : t;
   }
+  // Filter (supplier, invoice date range, search text). Kept for this session.
+  function invFlt() { return state.invFlt || (state.invFlt = { supplier: "", from: "", to: "", q: "" }); }
+  function invFilterCount() { var f = invFlt(); return (f.supplier ? 1 : 0) + (f.from || f.to ? 1 : 0) + (f.q ? 1 : 0); }
+  function invMatchesFilter(i) {
+    var f = invFlt();
+    if (f.supplier && invSupplierName(i) !== f.supplier) return false;
+    if (f.from || f.to) {
+      var t = invDateMs(i);
+      if (f.from && t < new Date(f.from + "T00:00:00").getTime()) return false;
+      if (f.to && t > new Date(f.to + "T23:59:59").getTime()) return false;
+    }
+    if (f.q) {
+      var ex = i.extracted || {}, hay = [i.invoice_number, i.order_number, i.vendor_name, i.supplier, i.file_name, ex.po_number, ex.job_reference, i.notes]
+        .concat(ex.other_references || []).join(" ").toLowerCase();
+      if (f.q.toLowerCase().split(/\s+/).some(function (w) { return w && hay.indexOf(w) < 0; })) return false;
+    }
+    return true;
+  }
+  function invFilterHtml(open) {
+    var f = invFlt(), sups = {};
+    getInvoices().forEach(function (i) { sups[invSupplierName(i)] = 1; });
+    if (!open) return '<div class="hint" style="margin:-4px 0 10px">Filtered: ' + esc([f.supplier, f.from || f.to ? (f.from || "…") + " to " + (f.to || "…") : "", f.q ? '"' + f.q + '"' : ""].filter(Boolean).join(" · ")) +
+      ' <button class="link-btn" data-action="inv-flt-clear">Clear</button></div>';
+    return '<div class="card inv-flt"><div class="filters">' +
+      '<label class="field"><span>Company</span><select class="input" id="if-sup"><option value="">All companies</option>' +
+      Object.keys(sups).sort().map(function (x) { return "<option" + (x === f.supplier ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field"><span>Search</span><input class="input" id="if-q" type="search" value="' + esc(f.q) + '" placeholder="Invoice #, order / job #, PO"></label>' +
+      '<label class="field"><span>Invoice date from</span><input class="input" id="if-from" type="date" value="' + esc(f.from) + '"></label>' +
+      '<label class="field"><span>to</span><input class="input" id="if-to" type="date" value="' + esc(f.to) + '"></label></div>' +
+      '<div class="btn-row"><button class="btn small" data-action="inv-flt-clear">Clear filter</button><button class="btn small primary" data-action="inv-flt-toggle">Done</button></div></div>';
+  }
   function invSupplierName(i) { return i.supplier || i.vendor_name || "Unknown supplier"; }
   function invSortable(f) { return f === "approved" || f === "sent_back" || f === "all"; }
   function invSortMode() { return store.get("invSort", "supplier"); }
   function invListFor(f) {
-    var fn = (INV_FILTERS.filter(function (x) { return x[0] === f; })[0] || INV_FILTERS[5])[2], list = getInvoices().filter(fn);
+    var fn = (INV_FILTERS.filter(function (x) { return x[0] === f; })[0] || INV_FILTERS[5])[2], list = getInvoices().filter(fn).filter(invMatchesFilter);
     if (!invSortable(f)) return list;
     var byDate = function (a, b) { return invDateMs(b) - invDateMs(a) || (a.created_at < b.created_at ? 1 : -1); };
     return list.slice().sort(invSortMode() === "date" ? byDate : function (a, b) {
@@ -3504,6 +3550,8 @@
     "invoices": function () { go("invoices"); refreshInvoices().then(function () { if (state.view === "invoices") render(); }); },
     "inv-upload": function () { document.getElementById("inv-file").click(); },
     "inv-filter": function (el) { state.invFilter = el.getAttribute("data-f"); render(); },
+    "inv-flt-toggle": function () { state.invFltOpen = !state.invFltOpen; render(); },
+    "inv-flt-clear": function () { state.invFlt = null; state.invFltOpen = false; render(); },
     "inv-sort": function (el) { store.set("invSort", el.getAttribute("data-s")); render(); },
     "inv-select": function () { state.invSel = state.invSel ? null : {}; render(); },
     "inv-toggle-sel": function (el) { var id = el.getAttribute("data-id"); if (state.invSel[id]) delete state.invSel[id]; else state.invSel[id] = true; var y = window.scrollY; render(); window.scrollTo(0, y); },
