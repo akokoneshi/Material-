@@ -2625,9 +2625,10 @@
     var nf = invFilterCount(), fo = state.invFltOpen;
     if (getInvoices().length && f !== "processing") {
       h += '<div class="inv-tools">' +
-        '<button class="chip' + (nf ? " on" : "") + '" data-action="inv-flt-toggle">' + ICON.search + (invFlt().supplier && nf === 1 ? esc(invFlt().supplier) : "Filter" + (nf ? " (" + nf + ")" : "")) + "</button>" +
+        '<button class="chip' + (nf ? " on" : "") + '" data-action="inv-flt-toggle">' + ICON.search + (nf === 1 && invFlt().supplier ? esc(invFlt().supplier) : nf === 1 && invFlt().job ? "Job " + esc(invFlt().job) : "Filter" + (nf ? " (" + nf + ")" : "")) + "</button>" +
         (invSortable(f) ? '<span class="hint" style="margin:0">Sort:</span>' +
         '<button class="chip' + (invSortMode() === "supplier" ? " on" : "") + '" data-action="inv-sort" data-s="supplier">Supplier</button>' +
+        '<button class="chip' + (invSortMode() === "job" ? " on" : "") + '" data-action="inv-sort" data-s="job">Job</button>' +
         '<button class="chip' + (invSortMode() === "date" ? " on" : "") + '" data-action="inv-sort" data-s="date">Date</button>' : "") +
         (list.length ? '<button class="chip" style="margin-left:auto" data-action="inv-select">' + (sel ? "Cancel selecting" : "Select for PDF") + "</button>" : "") + "</div>";
       if (fo || nf) h += invFilterHtml(fo);
@@ -2650,7 +2651,7 @@
   };
   AFTER.invoices = function () {
     // Filter fields: apply as you type / pick, keep focus in the search box.
-    [["if-sup", "supplier", "change"], ["if-from", "from", "change"], ["if-to", "to", "change"], ["if-q", "q", "input"]].forEach(function (x) {
+    [["if-sup", "supplier", "change"], ["if-job", "job", "change"], ["if-from", "from", "change"], ["if-to", "to", "change"], ["if-q", "q", "input"]].forEach(function (x) {
       var el = document.getElementById(x[0]);
       if (el) el.addEventListener(x[2], function () {
         invFlt()[x[1]] = el.value.trim();
@@ -2707,11 +2708,21 @@
     return isNaN(t) ? new Date(i.created_at).getTime() : t;
   }
   // Filter (supplier, invoice date range, search text). Kept for this session.
-  function invFlt() { return state.invFlt || (state.invFlt = { supplier: "", from: "", to: "", q: "" }); }
-  function invFilterCount() { var f = invFlt(); return (f.supplier ? 1 : 0) + (f.from || f.to ? 1 : 0) + (f.q ? 1 : 0); }
+  function invFlt() { return state.invFlt || (state.invFlt = { supplier: "", job: "", from: "", to: "", q: "" }); }
+  function invFilterCount() { var f = invFlt(); return (f.supplier ? 1 : 0) + (f.job ? 1 : 0) + (f.from || f.to ? 1 : 0) + (f.q ? 1 : 0); }
+  // Job # of an invoice: its order's job, else the job # in its order number / references, else the one picked in its price-list check.
+  function invJob(i) {
+    var o = orderForInvoice(i);
+    if (o && o.jobNumber) return jobKey(o.jobNumber);
+    var m = String(i.order_number || "").match(/^(.+)-\d{3}$/);
+    if (m) return jobKey(m[1]);
+    var pl = (store.get("invPL", {})[i.id] || {}).job;
+    return jobKey(pl != null && pl !== "" ? pl : guessInvoiceJob(i));
+  }
   function invMatchesFilter(i) {
     var f = invFlt();
     if (f.supplier && invSupplierName(i) !== f.supplier) return false;
+    if (f.job && invJob(i) !== jobKey(f.job)) return false;
     if (f.from || f.to) {
       var t = invDateMs(i);
       if (f.from && t < new Date(f.from + "T00:00:00").getTime()) return false;
@@ -2725,14 +2736,16 @@
     return true;
   }
   function invFilterHtml(open) {
-    var f = invFlt(), sups = {};
-    getInvoices().forEach(function (i) { sups[invSupplierName(i)] = 1; });
-    if (!open) return '<div class="hint" style="margin:-4px 0 10px">Filtered: ' + esc([f.supplier, f.from || f.to ? (f.from || "…") + " to " + (f.to || "…") : "", f.q ? '"' + f.q + '"' : ""].filter(Boolean).join(" · ")) +
+    var f = invFlt(), sups = {}, jobs = {};
+    getInvoices().forEach(function (i) { sups[invSupplierName(i)] = 1; var j = invJob(i); if (j) jobs[j] = 1; });
+    if (!open) return '<div class="hint" style="margin:-4px 0 10px">Filtered: ' + esc([f.supplier, f.job ? "Job " + f.job : "", f.from || f.to ? (f.from || "…") + " to " + (f.to || "…") : "", f.q ? '"' + f.q + '"' : ""].filter(Boolean).join(" · ")) +
       ' <button class="link-btn" data-action="inv-flt-clear">Clear</button></div>';
     return '<div class="card inv-flt"><div class="filters">' +
       '<label class="field"><span>Company</span><select class="input" id="if-sup"><option value="">All companies</option>' +
       Object.keys(sups).sort().map(function (x) { return "<option" + (x === f.supplier ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
-      '<label class="field"><span>Search</span><input class="input" id="if-q" type="search" value="' + esc(f.q) + '" placeholder="Invoice #, order / job #, PO"></label>' +
+      '<label class="field"><span>Job #</span><select class="input" id="if-job"><option value="">All jobs</option>' +
+      Object.keys(jobs).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); }).map(function (x) { return "<option" + (x === jobKey(f.job) ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field full"><span>Search</span><input class="input" id="if-q" type="search" value="' + esc(f.q) + '" placeholder="Invoice #, order / job #, PO"></label>' +
       '<label class="field"><span>Invoice date from</span><input class="input" id="if-from" type="date" value="' + esc(f.from) + '"></label>' +
       '<label class="field"><span>to</span><input class="input" id="if-to" type="date" value="' + esc(f.to) + '"></label></div>' +
       '<div class="btn-row"><button class="btn small" data-action="inv-flt-clear">Clear filter</button><button class="btn small primary" data-action="inv-flt-toggle">Done</button></div></div>';
@@ -2744,14 +2757,20 @@
     var fn = (INV_FILTERS.filter(function (x) { return x[0] === f; })[0] || INV_FILTERS[5])[2], list = getInvoices().filter(fn).filter(invMatchesFilter);
     if (!invSortable(f)) return list;
     var byDate = function (a, b) { return invDateMs(b) - invDateMs(a) || (a.created_at < b.created_at ? 1 : -1); };
-    return list.slice().sort(invSortMode() === "date" ? byDate : function (a, b) {
-      return invSupplierName(a).localeCompare(invSupplierName(b)) || byDate(a, b);
+    var mode = invSortMode();
+    if (mode === "date") return list.slice().sort(byDate);
+    return list.slice().sort(function (a, b) {
+      var ga = invGroupName(a, mode), gb = invGroupName(b, mode), na = ga === NO_JOB, nb = gb === NO_JOB;
+      return (na - nb) || ga.localeCompare(gb, undefined, { numeric: true }) || byDate(a, b);
     });
   }
+  var NO_JOB = "No job #";
+  function invGroupName(i, mode) { if (mode === "job") { var j = invJob(i); return j ? "Job " + j : NO_JOB; } return invSupplierName(i); }
   function invGroups(f, list) {
-    if (!invSortable(f) || invSortMode() !== "supplier") return [{ name: "", items: list }];
+    var mode = invSortMode();
+    if (!invSortable(f) || mode === "date") return [{ name: "", items: list }];
     var out = [];
-    list.forEach(function (i) { var n = invSupplierName(i); if (!out.length || out[out.length - 1].name !== n) out.push({ name: n, items: [] }); out[out.length - 1].items.push(i); });
+    list.forEach(function (i) { var n = invGroupName(i, mode); if (!out.length || out[out.length - 1].name !== n) out.push({ name: n, items: [] }); out[out.length - 1].items.push(i); });
     return out;
   }
   function invTileHtml(i) {
@@ -3556,7 +3575,7 @@
     "inv-select": function () { state.invSel = state.invSel ? null : {}; render(); },
     "inv-toggle-sel": function (el) { var id = el.getAttribute("data-id"); if (state.invSel[id]) delete state.invSel[id]; else state.invSel[id] = true; var y = window.scrollY; render(); window.scrollTo(0, y); },
     "inv-sel-group": function (el) {
-      var g = el.getAttribute("data-g"), items = invListFor(state.invFilter || "attention").filter(function (i) { return invSupplierName(i) === g; });
+      var g = el.getAttribute("data-g"), items = invListFor(state.invFilter || "attention").filter(function (i) { return invGroupName(i, invSortMode()) === g; });
       var on = !items.every(function (i) { return state.invSel[i.id]; });
       items.forEach(function (i) { if (on) state.invSel[i.id] = true; else delete state.invSel[i.id]; });
       var y = window.scrollY; render(); window.scrollTo(0, y);

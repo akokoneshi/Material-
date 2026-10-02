@@ -177,7 +177,7 @@ only** (a book for that job; a new "<supplier> items from invoices" book is made
 the name, part #, unit, price and category first. Invoice reviewers who aren't admins send them as price-list requests instead.
 
 After **Approve** or **Reject**, the next invoice waiting for review opens automatically.
-**Filter** narrows every tab by company, invoice date range or a search (invoice #, order / job #, PO). The **Approved**, **Rejected** and **All** tabs sort by **Supplier** (grouped, newest invoice date first) or by **Date**.
+**Filter** narrows every tab by company, job #, invoice date range or a search (invoice #, order / job #, PO). The **Approved**, **Rejected** and **All** tabs sort by **Supplier** or **Job** (grouped, newest invoice date first) or by **Date**.
 **Select for PDF** lets you tick invoices (or a whole supplier) and download their uploaded files as **one combined PDF**,
 in list order; photos become a page each (pdf-lib, `js/vendor/pdf-lib.min.js`, MIT).
 
