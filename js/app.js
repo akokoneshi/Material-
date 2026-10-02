@@ -2642,8 +2642,8 @@
       }).join("");
     }
     if (sel) {
-      var n = list.filter(function (i) { return sel[i.id]; }).length;
-      h += '<div class="inv-selbar"><span><b>' + n + "</b> selected</span>" +
+      var picked = list.filter(function (i) { return sel[i.id]; }), n = picked.length, tt = invTotals(picked);
+      h += '<div class="inv-selbar"><span><b>' + n + "</b> selected" + (n ? '<br><small>Total ' + fmtMoney(tt.total) + (tt.over > 0 ? ' · <b class="neg">Overbilled ' + fmtMoney(tt.over) + "</b>" : "") + "</small>" : "") + "</span>" +
         '<button class="btn small" data-action="inv-sel-all">' + (n === list.length ? "Clear" : "Select all") + "</button>" +
         '<button class="btn primary small" data-action="inv-export-pdf"' + (n ? "" : " disabled") + ">Combined PDF</button></div>";
     }
@@ -2798,8 +2798,82 @@
       img.src = url;
     });
   }
-  function exportInvoicesPdf(list) {
-    var skipped = [];
+  // Overbilled amount on an invoice: lines billed above the order price (or, with no order, above our price list / job price).
+  function invOverbilled(inv) {
+    var rows = invCompareRows(inv);
+    if (rows.length) return round2(rows.reduce(function (a, r) { return a + (r.status === "price" && r.price_diff > 0 && r.inv_qty ? r.price_diff * r.inv_qty : 0); }, 0));
+    var saved = store.get("invPL", {})[inv.id] || {}, sup = saved.supplier || inv.supplier || "", job = saved.job != null ? saved.job : guessInvoiceJob(inv);
+    if (!sup || !((inv.extracted || {}).lines || []).length) return 0;
+    return round2(priceListCheck(inv, sup, job).reduce(function (a, r) { return a + (r.status === "price" && r.diff > 0 && r.line.quantity ? r.diff * r.line.quantity : 0); }, 0));
+  }
+  function invTotals(list) {
+    var t = { total: 0, over: 0, noTotal: 0, overCount: 0 };
+    list.forEach(function (i) {
+      if (i.total != null && !isNaN(+i.total)) t.total += +i.total; else t.noTotal++;
+      var o = invOverbilled(i); if (o > 0) { t.over += o; t.overCount++; }
+    });
+    t.total = round2(t.total); t.over = round2(t.over);
+    return t;
+  }
+  // Summary page(s) at the front of the combined PDF: one row per invoice with its total and overbilled amount.
+  function addSummaryPages(L, out, list, skipped, title) {
+    return out.embedFont(L.StandardFonts.Helvetica).then(function (font) {
+      return out.embedFont(L.StandardFonts.HelveticaBold).then(function (bold) {
+        var clean = function (t) { return String(t == null ? "" : t).replace(/[^\x20-\x7E\xA0-\xFF]/g, ""); };
+        var fit = function (t, f, size, w) { t = clean(t); if (f.widthOfTextAtSize(t, size) <= w) return t; while (t && f.widthOfTextAtSize(t + "...", size) > w) t = t.slice(0, -1); return t + "..."; };
+        var money = function (n) { return "$" + (+n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ","); };
+        var dark = L.rgb(0.1, 0.1, 0.12), grey = L.rgb(0.42, 0.45, 0.5), red = L.rgb(0.7, 0.06, 0.1), line = L.rgb(0.85, 0.87, 0.9);
+        var cols = [["Supplier", 40, 118], ["Invoice #", 160, 86], ["Date", 248, 62], ["Job", 312, 50], ["Status", 364, 64], ["Total", 430, 66, 1], ["Overbilled", 498, 74, 1]];
+        var t = invTotals(list), W = 612, H = 792, size = 9, rowH = 16, pages = [], page, y;
+        function newPage(first) {
+          page = out.insertPage(pages.length, [W, H]); pages.push(page);
+          y = H - 48;
+          if (first) {
+            page.drawText("Kim Industries - Invoice summary", { x: 40, y: y, size: 16, font: bold, color: dark }); y -= 18;
+            page.drawText(clean(title + " - " + list.length + " invoice" + (list.length === 1 ? "" : "s") + " - " + new Date().toLocaleDateString()), { x: 40, y: y, size: 10, font: font, color: grey }); y -= 26;
+            [["Invoice total", money(t.total) + (t.noTotal ? "  (" + t.noTotal + " without a total)" : ""), dark],
+              ["Overbilled", money(t.over) + (t.overCount ? "  on " + t.overCount + " invoice" + (t.overCount === 1 ? "" : "s") : ""), t.over > 0 ? red : dark]].forEach(function (r) {
+              page.drawText(r[0], { x: 40, y: y, size: 11, font: font, color: grey });
+              page.drawText(clean(r[1]), { x: 140, y: y, size: 12, font: bold, color: r[2] }); y -= 18;
+            });
+            y -= 12;
+          }
+          cols.forEach(function (c) { var tx = c[0]; page.drawText(tx, { x: c[3] ? c[1] + c[2] - bold.widthOfTextAtSize(tx, size) : c[1], y: y, size: size, font: bold, color: grey }); });
+          y -= 6; page.drawLine({ start: { x: 40, y: y }, end: { x: W - 40, y: y }, thickness: 0.8, color: line }); y -= rowH - 4;
+        }
+        newPage(true);
+        list.forEach(function (i) {
+          if (y < 60) newPage(false);
+          var o = invOverbilled(i);
+          var vals = [invSupplierName(i), i.invoice_number || "-", i.invoice_date || "-", invJob(i) || "-", (INV_STATUS[invStatus(i)] || ["", i.status])[1],
+            i.total != null ? money(i.total) : "-", o > 0 ? money(o) : "-"];
+          cols.forEach(function (c, k) {
+            var f = k === 6 && o > 0 ? bold : font, tx = fit(vals[k], f, size, c[2] - 4);
+            page.drawText(tx, { x: c[3] ? c[1] + c[2] - f.widthOfTextAtSize(tx, size) : c[1], y: y, size: size, font: f, color: k === 6 && o > 0 ? red : dark });
+          });
+          y -= rowH;
+        });
+        if (y < 80) newPage(false);
+        page.drawLine({ start: { x: 40, y: y + rowH - 6 }, end: { x: W - 40, y: y + rowH - 6 }, thickness: 0.8, color: line });
+        page.drawText("Total", { x: 40, y: y - 2, size: 10, font: bold, color: dark });
+        [[5, money(t.total), dark], [6, money(t.over), t.over > 0 ? red : dark]].forEach(function (r) {
+          var c = cols[r[0]]; page.drawText(r[1], { x: c[1] + c[2] - bold.widthOfTextAtSize(r[1], 10), y: y - 2, size: 10, font: bold, color: r[2] });
+        });
+        y -= 22;
+        var notes = ["Overbilled = lines billed above our order price (or, with no order, above our price list / job price), times the quantity billed."]
+          .concat(skipped.length ? ["Not in this PDF (file couldn't be read): " + skipped.join("; ")] : []);
+        notes.forEach(function (n) {
+          var words = clean(n).split(" "), ln = "";
+          words.forEach(function (w) {
+            if (font.widthOfTextAtSize(ln + " " + w, 8) > W - 80) { if (y < 40) newPage(false); page.drawText(ln, { x: 40, y: y, size: 8, font: font, color: grey }); y -= 11; ln = w; } else ln = ln ? ln + " " + w : w;
+          });
+          if (ln) { page.drawText(ln, { x: 40, y: y, size: 8, font: font, color: grey }); y -= 14; }
+        });
+      });
+    });
+  }
+  function exportInvoicesPdf(list, title) {
+    var skipped = [], included = [];
     return (window.PDFLib ? Promise.resolve() : loadScript("js/vendor/pdf-lib.min.js")).then(function () {
       var L = window.PDFLib;
       return L.PDFDocument.create().then(function (out) {
@@ -2816,11 +2890,11 @@
               var k = Math.min((W - 2 * m) / img.width, (H - 2 * m) / img.height), w = img.width * k, hh = img.height * k;
               out.addPage([W, H]).drawImage(img, { x: (W - w) / 2, y: (H - hh) / 2, width: w, height: hh });
             });
-          }).then(null, function (e) { skipped.push(label + ": " + (e && e.message || "couldn't be read")); });
+          }).then(function () { included.push(inv); }, function (e) { skipped.push(label + ": " + (e && e.message || "couldn't be read")); });
         });
         return chain.then(function () {
           if (!out.getPageCount()) throw new Error("None of the selected invoice files could be read." + (skipped.length ? "\n" + skipped.join("\n") : ""));
-          return out.save();
+          return addSummaryPages(L, out, included, skipped, title || "Invoices").then(function () { return out.save(); });
         });
       });
     }).then(function (bytes) { return { blob: new Blob([bytes], { type: "application/pdf" }), skipped: skipped }; });
@@ -3592,7 +3666,7 @@
       el.disabled = true; el.textContent = "Building PDF…";
       var tabName = { approved: "Approved", sent_back: "Rejected", matched: "Matched", attention: "Needs review", all: "All" }[f] || "Selected";
       var name = "Invoices - " + tabName + " - " + new Date().toISOString().slice(0, 10) + ".pdf";
-      exportInvoicesPdf(list).then(function (r) {
+      exportInvoicesPdf(list, tabName + " invoices").then(function (r) {
         var file = new File([r.blob], name, { type: "application/pdf" });
         var note = list.length - r.skipped.length + " invoice" + (list.length - r.skipped.length === 1 ? "" : "s") + " in one PDF";
         if (r.skipped.length) alert("Left out of the PDF:\n" + r.skipped.join("\n"));

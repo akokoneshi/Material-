@@ -179,7 +179,7 @@ the name, part #, unit, price and category first. Invoice reviewers who aren't a
 After **Approve** or **Reject**, the next invoice waiting for review opens automatically.
 **Filter** narrows every tab by company, job #, invoice date range or a search (invoice #, order / job #, PO). The **Approved**, **Rejected** and **All** tabs sort by **Supplier** or **Job** (grouped, newest invoice date first) or by **Date**.
 **Select for PDF** lets you tick invoices (or a whole supplier) and download their uploaded files as **one combined PDF**,
-in list order; photos become a page each (pdf-lib, `js/vendor/pdf-lib.min.js`, MIT).
+in list order, starting with a summary page (each invoice's total and overbilled amount, plus grand totals); photos become a page each (pdf-lib, `js/vendor/pdf-lib.min.js`, MIT).
 
 Who can see invoices: admins, and people given **Can review invoices** in Users & Permissions.
 
