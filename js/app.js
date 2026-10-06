@@ -794,6 +794,7 @@
           : "Job " + jobKey(num) + " isn't in the jobs list for your division" + (myDivisions().length === 1 ? "" : "s") + ". Ask an admin to add it.");
       }
       if (known) num = known.job_number;
+      if (!known && isAdmin() && !store.get("jobsSetupMissing", false)) { openAddJobSheet(jobKey(num), nameIn.value.trim()); return; }
       createOrder(state.draft.supplier, num, nameIn.value.trim() || (known && known.job_name) || "");
     });
     input.addEventListener("input", function () {
@@ -805,6 +806,25 @@
     });
   };
 
+  // Admin started an order for a job that isn't on the jobs list: add it (name + division) or just continue.
+  function openAddJobSheet(job, name) {
+    openSheet("<h2>Job " + esc(job) + " isn't on the jobs list</h2>" +
+      '<p class="hint" style="margin-top:0">Add it so people in its division can see and order on it.</p>' +
+      '<label class="field"><span>Job name <span class="req">*</span></span><input class="input" id="aj-name" value="' + esc(name) + '" placeholder="e.g. Mercy Hospital Boiler Rm"></label>' +
+      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" id="aj-div"><option value="">Pick…</option>' + DIVISIONS.map(function (d) { return "<option>" + d + "</option>"; }).join("") + "</select></label>" +
+      '<div class="error-text" id="aj-err" hidden></div>' +
+      '<div class="btn-row" style="margin-top:12px"><button class="btn" id="aj-skip">Order without adding</button><button class="btn primary" id="aj-save">Add job &amp; start order</button></div>', function (sheet) {
+      sheet.querySelector("#aj-skip").addEventListener("click", function () { closeSheet(); createOrder(state.draft.supplier, job, name); });
+      sheet.querySelector("#aj-save").addEventListener("click", function (e) {
+        var n = sheet.querySelector("#aj-name").value.trim(), d = sheet.querySelector("#aj-div").value, err = sheet.querySelector("#aj-err");
+        if (!n || !d) { err.textContent = "Enter the job name and pick a division."; err.hidden = false; return; }
+        e.target.disabled = true;
+        Cloud.saveJobs([{ job_number: job, job_name: n, division: d }]).then(refreshJobs).then(function () {
+          closeSheet(); toast("Job " + job + " added to Division " + d); createOrder(state.draft.supplier, job, n);
+        }, function (ex) { e.target.disabled = false; err.textContent = ex.message || "Couldn't save"; err.hidden = false; });
+      });
+    });
+  }
   function createOrder(supplier, jobNumber, jobName) {
     var s = settings();
     var order = {
@@ -3539,8 +3559,9 @@
     h += '<p class="hint" style="margin-top:0">Every job # belongs to a division. People are given divisions under <b>Users &amp; Permissions</b> and only see and order on those divisions\' jobs. Admins see everything.</p>';
     h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a job</h2><form id="job-add" autocomplete="off"><div class="filters">' +
       '<label class="field"><span>Job # <span class="req">*</span></span><input class="input" name="job" required autocapitalize="characters" placeholder="e.g. 3425"></label>' +
-      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" name="div">' + divs.map(function (d) { return "<option>" + esc(d) + "</option>"; }).join("") + "</select></label>" +
-      '<label class="field full"><span>Job name</span><input class="input" name="name" placeholder="optional"></label></div>' +
+      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" name="div"><option value="">Pick…</option>' + divs.map(function (d) { return "<option>" + esc(d) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field full"><span>Job name <span class="req">*</span></span><input class="input" name="name" required placeholder="e.g. Mercy Hospital Boiler Rm"></label></div>' +
+      '<div class="error-text" id="job-add-err" hidden></div>' +
       '<button class="btn primary block" type="submit">Save job</button></form>' +
       '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="jobs-import">Import Excel / CSV</button><button class="btn" data-action="jobs-paste">Paste a list</button></div>' +
       '<input type="file" id="jobs-file" accept=".xlsx,.xls,.csv,.ods" hidden></div>';
@@ -3566,8 +3587,10 @@
     var form = document.getElementById("job-add");
     form.addEventListener("submit", function (e) {
       e.preventDefault();
-      var job = jobKey(form.job.value);
-      if (!job) { form.job.focus(); return; }
+      var job = jobKey(form.job.value), err = document.getElementById("job-add-err");
+      var miss = !job ? "the job #" : !form.name.value.trim() ? "the job name" : !form.div.value ? "the division" : "";
+      if (miss) { err.textContent = "Enter " + miss + "."; err.hidden = false; (!job ? form.job : !form.name.value.trim() ? form.name : form.div).focus(); return; }
+      err.hidden = true;
       var row = { job_number: job, job_name: form.name.value.trim(), division: form.div.value };
       var ex = jobsByKey()[job];
       if (ex && String(ex.division) !== row.division && !confirm("Job " + job + " is in Division " + ex.division + ". Move it to Division " + row.division + "?")) return;
@@ -3897,12 +3920,14 @@
     "job-edit": function (el) {
       var j = jobsByKey()[el.getAttribute("data-job")];
       if (!j) return;
+      var dl = DIVISIONS.slice(); if (dl.indexOf(String(j.division)) < 0) dl.push(String(j.division));
       openSheet("<h2>Job " + esc(j.job_number) + "</h2>" +
         '<label class="field"><span>Job name</span><input class="input" id="je-name" value="' + esc(j.job_name || "") + '"></label>' +
+        '<label class="field"><span>Division</span><select class="input" id="je-div">' + dl.map(function (d) { return "<option" + (String(j.division) === d ? " selected" : "") + ">" + esc(d) + "</option>"; }).join("") + "</select></label>" +
         '<label class="toggle"><input type="checkbox" id="je-active"' + (j.active !== false ? " checked" : "") + '>Active (shows up when people start an order)</label>' +
         '<div class="btn-row" style="margin-top:12px"><button class="btn danger" id="je-del">Delete job</button><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="je-save">Save</button></div>', function (sheet) {
         sheet.querySelector("#je-save").addEventListener("click", function () {
-          Cloud.saveJobs([{ job_number: j.job_number, division: j.division, job_name: sheet.querySelector("#je-name").value.trim(), active: sheet.querySelector("#je-active").checked }])
+          Cloud.saveJobs([{ job_number: j.job_number, division: sheet.querySelector("#je-div").value, job_name: sheet.querySelector("#je-name").value.trim(), active: sheet.querySelector("#je-active").checked }])
             .then(refreshJobs).then(function () { closeSheet(); toast("Saved"); render(); }, function (ex) { toast(ex.message); });
         });
         sheet.querySelector("#je-del").addEventListener("click", function () {
