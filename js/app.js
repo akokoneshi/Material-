@@ -2810,7 +2810,13 @@
     return isNaN(t) ? new Date(i.created_at).getTime() : t;
   }
   // Filter (supplier, invoice date range, search text). Kept for this session.
-  function invFlt() { return state.invFlt || (state.invFlt = { supplier: "", job: "", from: "", to: "", q: "" }); }
+  function invFlt() { return state.invFlt || (state.invFlt = { supplier: "", job: "", from: "", to: "", q: "", dateBy: "uploaded" }); }
+  // Date used by the filter: the day it was uploaded (default) or the date printed on the invoice.
+  function invFilterDateMs(i) {
+    if (invFlt().dateBy === "invoice") return invDateMs(i);
+    var d = new Date(i.created_at);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
   function invFilterCount() { var f = invFlt(); return (f.supplier ? 1 : 0) + (f.job ? 1 : 0) + (f.from || f.to ? 1 : 0) + (f.q ? 1 : 0); }
   // Job # of an invoice: its order's job, else the job # in its order number / references, else the one picked in its price-list check.
   function invJob(i) {
@@ -2842,7 +2848,7 @@
     if (f.supplier && invSupplierName(i) !== f.supplier) return false;
     if (f.job && invJob(i) !== jobKey(f.job)) return false;
     if (f.from || f.to) {
-      var t = invDateMs(i);
+      var t = invFilterDateMs(i);
       if (f.from && t < new Date(f.from + "T00:00:00").getTime()) return false;
       if (f.to && t > new Date(f.to + "T23:59:59").getTime()) return false;
     }
@@ -2856,7 +2862,7 @@
   function invFilterHtml(open) {
     var f = invFlt(), sups = {}, jobs = {};
     getInvoices().forEach(function (i) { sups[invSupplierName(i)] = 1; var j = invJob(i); if (j) jobs[j] = 1; });
-    if (!open) return '<div class="hint" style="margin:-4px 0 10px">Filtered: ' + esc([f.supplier, f.job ? "Job " + f.job : "", f.from || f.to ? (f.from || "…") + " to " + (f.to || "…") : "", f.q ? '"' + f.q + '"' : ""].filter(Boolean).join(" · ")) +
+    if (!open) return '<div class="hint" style="margin:-4px 0 10px">Filtered: ' + esc([f.supplier, f.job ? "Job " + f.job : "", f.from || f.to ? (f.dateBy === "invoice" ? "invoice date " : "uploaded ") + (f.from || "…") + " to " + (f.to || "…") : "", f.q ? '"' + f.q + '"' : ""].filter(Boolean).join(" · ")) +
       ' <button class="link-btn" data-action="inv-flt-clear">Clear</button></div>';
     return '<div class="card inv-flt"><div class="filters">' +
       '<label class="field"><span>Company</span><select class="input" id="if-sup"><option value="">All companies</option>' +
@@ -2864,8 +2870,11 @@
       '<label class="field"><span>Job #</span><select class="input" id="if-job"><option value="">All jobs</option>' +
       Object.keys(jobs).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); }).map(function (x) { return "<option" + (x === jobKey(f.job) ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field full"><span>Search</span><input class="input" id="if-q" type="search" value="' + esc(f.q) + '" placeholder="Invoice #, order / job #, PO"></label>' +
-      '<label class="field"><span>Invoice date from</span><input class="input" id="if-from" type="date" value="' + esc(f.from) + '"></label>' +
-      '<label class="field"><span>to</span><input class="input" id="if-to" type="date" value="' + esc(f.to) + '"></label></div>' +
+      '<div class="field full" style="margin:0"><span>Date</span><div class="seg" style="margin:4px 0 0">' +
+        '<button type="button" data-action="inv-flt-dateby" data-v="uploaded" class="' + (f.dateBy !== "invoice" ? "on" : "") + '">Uploaded</button>' +
+        '<button type="button" data-action="inv-flt-dateby" data-v="invoice" class="' + (f.dateBy === "invoice" ? "on" : "") + '">Invoice date</button></div></div>' +
+      '<label class="field"><span>From</span><input class="input" id="if-from" type="date" value="' + esc(f.from) + '"></label>' +
+      '<label class="field"><span>To</span><input class="input" id="if-to" type="date" value="' + esc(f.to) + '"></label></div>' +
       '<div class="btn-row"><button class="btn small" data-action="inv-flt-clear">Clear filter</button><button class="btn small primary" data-action="inv-flt-toggle">Done</button></div></div>';
   }
   function invSupplierName(i) { return i.supplier || i.vendor_name || "Unknown supplier"; }
@@ -4074,6 +4083,7 @@
     "inv-upload": function () { document.getElementById("inv-file").click(); },
     "inv-filter": function (el) { state.invFilter = el.getAttribute("data-f"); render(); },
     "inv-flt-toggle": function () { state.invFltOpen = !state.invFltOpen; render(); },
+    "inv-flt-dateby": function (el) { invFlt().dateBy = el.getAttribute("data-v"); var y = window.scrollY; render(); window.scrollTo(0, y); },
     "inv-flt-clear": function () { state.invFlt = null; state.invFltOpen = false; render(); },
     "inv-sort": function (el) { store.set("invSort", el.getAttribute("data-s")); render(); },
     "inv-select": function () { state.invSel = state.invSel ? null : {}; render(); },
