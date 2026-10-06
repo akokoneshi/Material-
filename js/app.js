@@ -362,7 +362,10 @@
     if (changed) putOrder(o);
     return changed;
   }
+  // Field users never see prices; their orders go out without pricing.
+  function hidePrices() { return isField(); }
   function jobPriceHtml(p, unit) {
+    if (hidePrices()) return '<span class="unit">' + esc(unit) + "</span>";
     return p.special
       ? '<span class="job-price">Job price</span> ' + fmtMoney(p.price) + ' <span class="unit">/ ' + esc(unit) + "</span>" +
         (p.regular > 0 && p.regular !== p.price ? ' <s class="reg">' + fmtMoney(p.regular) + "</s>" : "")
@@ -565,6 +568,7 @@
   function orderTotal(o) { return round2(supLines(o).reduce(function (s, l) { return s + lineTotal(l); }, 0)); }
   function fmtQty(q) { return String(+(+q).toFixed(3)); }
   function priceHtml(price, unit) {
+    if (hidePrices()) return '<span class="unit">' + esc(unit) + "</span>";
     return price > 0
       ? fmtMoney(price) + ' <span class="unit">/ ' + esc(unit) + "</span>"
       : '<span class="tbd">Price TBD</span> <span class="unit">/ ' + esc(unit) + "</span>";
@@ -713,7 +717,7 @@
     var n = o.lines.length;
     return '<button class="tile" data-action="open-order" data-id="' + esc(o.id) + '"><div class="t-main">' +
       '<div class="t-title">Job ' + esc(o.jobNumber) + (o.jobName ? " · " + esc(o.jobName) : "") + "</div>" +
-      '<div class="t-sub">' + esc(o.supplier) + " · " + n + " item" + (n === 1 ? "" : "s") + " · " + fmtMoney(orderTotal(o)) + "</div>" +
+      '<div class="t-sub">' + esc(o.supplier) + " · " + n + " item" + (n === 1 ? "" : "s") + (hidePrices() ? "" : " · " + fmtMoney(orderTotal(o))) + "</div>" +
       '<div class="t-sub">' + esc(orderNo(o)) + (o.createdByName ? " · " + esc(o.createdByName) : "") + " · " + esc(fmtDate(o.updatedAt)) + "</div>" +
       (o.dirty && Cloud.enabled ? '<div class="t-sub unsynced">Not yet synced to office</div>' : "") +
       '</div><span class="badge ' + (o.status === "draft" ? "draft" : "sent") + '">' + (o.status === "draft" ? "Draft" : "Sent") + "</span></button>";
@@ -818,7 +822,7 @@
       delivery: "deliver",
       deliverTo: "",
       notes: "",
-      showPricing: true,
+      showPricing: !hidePrices(),
       lines: [],
       createdAt: new Date().toISOString()
     };
@@ -1150,7 +1154,7 @@
     var n = o.lines.length;
     return '<div class="cartbar" id="cartbar"><div class="cartbar-inner"><div class="c-info">' +
       '<div class="c-count">' + n + " item" + (n === 1 ? "" : "s") + " in order</div>" +
-      '<div class="c-total">' + (o.lines.length ? "Est. " + fmtMoney(orderTotal(o)) : "Search or browse to add materials") + "</div></div>" +
+      '<div class="c-total">' + (o.lines.length ? (hidePrices() ? "Tap Review when you're done" : "Est. " + fmtMoney(orderTotal(o))) : "Search or browse to add materials") + "</div></div>" +
       '<button class="btn primary" data-action="review"' + (n ? "" : " disabled") + ">Review Order ›</button></div></div>";
   }
 
@@ -1283,7 +1287,7 @@
     var quick = /^(LF|FT|SF|LY)$/.test(opt.unit) ? [10, 25, 50, 100] : [1, 5, 10, 25];
     var h = "<h2>" + esc(opt.title) + "</h2>" +
       (opt.sub ? '<div class="hint" style="margin-top:-6px">' + esc(opt.sub) + "</div>" : "") +
-      '<div style="font-weight:700">' + (opt.note ? esc(opt.note) : opt.price > 0 ? fmtMoney(opt.price) + " / " + esc(opt.unit) : "Price TBD / " + esc(opt.unit)) + "</div>" +
+      (hidePrices() ? "" : '<div style="font-weight:700">' + (opt.note ? esc(opt.note) : opt.price > 0 ? fmtMoney(opt.price) + " / " + esc(opt.unit) : "Price TBD / " + esc(opt.unit)) + "</div>") +
       '<div class="big-stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>' +
       '<input id="qty" type="number" inputmode="decimal" min="0" step="any" value="' + esc(opt.qty) + '" placeholder="0" aria-label="Quantity">' +
       '<button type="button" data-step="1" aria-label="Increase">+</button></div>' +
@@ -1298,7 +1302,7 @@
       var input = sheet.querySelector("#qty");
       function upd() {
         var q = parseFloat(input.value) || 0;
-        sheet.querySelector("#line-total").innerHTML = q > 0 && opt.price > 0 ? "Line total: <b>" + fmtMoney(round2(q * opt.price)) + "</b>" : "&nbsp;";
+        sheet.querySelector("#line-total").innerHTML = q > 0 && opt.price > 0 && !hidePrices() ? "Line total: <b>" + fmtMoney(round2(q * opt.price)) + "</b>" : "&nbsp;";
       }
       sheet.querySelectorAll("[data-step]").forEach(function (b) {
         b.addEventListener("click", function () {
@@ -1352,12 +1356,12 @@
 
   function openCustomSheet(prefill) {
     var h = "<h2>Add an item that isn't in the price list</h2>" +
-      '<p class="hint" style="margin-top:-6px">Type what you need. Price can be left blank; the supplier will price it.</p><form id="custom-form">' +
+      '<p class="hint" style="margin-top:-6px">Type what you need.' + (hidePrices() ? "" : " Price can be left blank; the supplier will price it.") + '</p><form id="custom-form">' +
       '<label class="field"><span>Item name / description <span class="req">*</span></span><input class="input" id="c-name" required value="' + esc(prefill || "") + '" placeholder=\'e.g. 3" x 1" fiberglass pipe, special order\'></label>' +
       '<label class="field"><span>Part # <small style="font-weight:500;color:var(--muted)">(optional)</small></span><input class="input" id="c-part" autocomplete="off" placeholder="Supplier part / item number, if you know it"></label>' +
       '<div class="filters"><label class="field"><span>Quantity <span class="req">*</span></span><input class="input" id="c-qty" type="number" inputmode="decimal" min="0" step="any"></label>' +
       '<label class="field"><span>Unit</span><select class="input" id="c-unit">' + ["EA", "LF", "FT", "SF", "RL", "BX", "PK", "GAL", "SET"].map(function (u) { return "<option>" + u + "</option>"; }).join("") + "</select></label>" +
-      '<label class="field full"><span>Price per unit <small style="font-weight:500;color:var(--muted)">(optional)</small></span><input class="input" id="c-price" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank if unknown"></label></div>' +
+      '<label class="field full"' + (hidePrices() ? " hidden" : "") + '><span>Price per unit <small style="font-weight:500;color:var(--muted)">(optional)</small></span><input class="input" id="c-price" type="number" inputmode="decimal" min="0" step="any" placeholder="Leave blank if unknown"></label></div>' +
       (Cloud.enabled ? '<label class="toggle request-toggle"><input type="checkbox" id="c-request"><span>Ask to add this to the price list<small>An admin reviews it before it\'s added for everyone.</small></span></label>' : "") +
       '<div class="btn-row"><button type="button" class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" type="submit">Add to Order</button></div></form>';
     openSheet(h, function (sheet) {
@@ -1409,7 +1413,7 @@
     h += '<h3>Order from ' + esc(o.supplier) + " (" + sup.length + ')</h3><div class="card">';
     if (!sup.length) h += '<div class="empty">' + (shp.length ? "Nothing to order from the supplier - everything is coming from the shop." : "No materials yet.") + "</div>";
     sup.forEach(function (l) { h += lineHtml(l); });
-    if (sup.length) {
+    if (sup.length && !hidePrices()) {
       h += '<div class="totals"><span>Estimated total</span><span id="order-total">' + fmtMoney(orderTotal(o)) + "</span></div>";
       if (sup.some(function (l) { return !(l.price > 0); })) h += '<div class="notice">Some items have no listed price and are not included in the total.</div>';
     }
@@ -1432,7 +1436,7 @@
       '<label class="field"><span>Notes for supplier</span><textarea class="input" name="notes" placeholder="Anything the supplier should know">' + esc(o.notes) + "</textarea></label>" +
       "</form></div>";
 
-    h += '<h3>Pricing</h3><div class="card"><label class="toggle"><input type="checkbox" id="show-pricing"' + (o.showPricing ? " checked" : "") + ">" +
+    if (!hidePrices()) h += '<h3>Pricing</h3><div class="card"><label class="toggle"><input type="checkbox" id="show-pricing"' + (o.showPricing ? " checked" : "") + ">" +
       "Include listed pricing on the order</label><div class=\"hint\" style=\"margin:0\">Turn off to send quantities only.</div></div>";
 
     h += '<div class="btn-row" style="margin:20px 0 8px"><button class="btn primary big" data-action="to-send"' + (o.lines.length ? "" : " disabled") + ">Create Order ›</button></div>" +
@@ -1454,7 +1458,8 @@
         store.set("settings", s);
       }
     });
-    document.getElementById("show-pricing").addEventListener("change", function (e) {
+    var sp = document.getElementById("show-pricing");
+    if (sp) sp.addEventListener("change", function (e) {
       var o = currentOrder();
       o.showPricing = e.target.checked;
       putOrder(o);
@@ -1480,9 +1485,9 @@
       '<div class="l-sub">' + (shop
         ? '<span class="div-tag">Div ' + esc(l.division) + "</span> " + (l.pulled ? "Pulled ✓" : "To be pulled from shop")
         : (l.custom ? "Not in price list" + (l.model ? " · #" + esc(l.model) : "") + (l.requested ? " · requested for price list" : "") : esc(l.category) + (l.model ? " · #" + esc(l.model) : "")) + " · " +
-          (l.special ? '<span class="job-price">Job price</span> ' : "") +
-          (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit)) + "</div></div>" +
-      '<div class="l-ext">' + (shop ? "Shop" : l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
+          (hidePrices() ? esc(l.unit) : (l.special ? '<span class="job-price">Job price</span> ' : "") +
+          (l.price > 0 ? fmtMoney(l.price) : "Price TBD") + " / " + esc(l.unit))) + "</div></div>" +
+      '<div class="l-ext">' + (shop ? "Shop" : hidePrices() ? "" : l.price > 0 ? fmtMoney(lineTotal(l)) : "—") + "</div>" +
       (shop && l.pulled ? '<div class="l-controls"><b>' + esc(fmtQty(l.qty)) + " " + esc(l.unit) + "</b></div>" :
       '<div class="l-controls"><div class="stepper"><button data-action="line-step" data-key="' + esc(l.key) + '" data-step="-1" aria-label="Decrease">−</button>' +
       '<input type="number" inputmode="decimal" min="0" step="any" value="' + esc(fmtQty(l.qty)) + '" data-line-qty="' + esc(l.key) + '" aria-label="Quantity">' +
@@ -1508,8 +1513,8 @@
     h += '<div class="card done-card"><div class="done-icon">' + (o.status === "sent" ? "✓" : "➜") + '</div><h2 style="margin-top:0">' +
       (o.status === "sent" ? "Order sent" : "Order ready to send") + "</h2>" +
       '<div class="hint">' + supLines(o).length + " from " + esc(o.supplier) + (shopLines(o).length ? " · " + shopLines(o).length + " from our shop" : "") +
-        (supLines(o).length ? " · " + (o.showPricing ? "Est. " + fmtMoney(orderTotal(o)) : "pricing hidden") : "") + "</div>" +
-      '<label class="toggle" style="justify-content:center"><input type="checkbox" id="send-pricing"' + (o.showPricing ? " checked" : "") + ">Include listed pricing</label></div>";
+        (supLines(o).length && !hidePrices() ? " · " + (o.showPricing ? "Est. " + fmtMoney(orderTotal(o)) : "pricing hidden") : "") + "</div>" +
+      (hidePrices() ? "" : '<label class="toggle" style="justify-content:center"><input type="checkbox" id="send-pricing"' + (o.showPricing ? " checked" : "") + ">Include listed pricing</label>") + "</div>";
     var hasSup = supLines(o).length > 0, shp = shopLines(o);
     if (shp.length) {
       var waiting = shp.filter(function (l) { return !l.pulled; });
@@ -1542,7 +1547,8 @@
     return h;
   };
   AFTER.send = function () {
-    document.getElementById("send-pricing").addEventListener("change", function (e) {
+    var spp = document.getElementById("send-pricing");
+    if (spp) spp.addEventListener("change", function (e) {
       var o = currentOrder();
       o.showPricing = e.target.checked;
       putOrder(o);
@@ -1556,7 +1562,7 @@
   function emailFor(supplier) { return supplierEmails()[supplier] || ""; }
 
   function orderText(o) {
-    var p = o.showPricing;
+    var p = o.showPricing && !hidePrices();
     var t = "KIM INDUSTRIES - MATERIAL ORDER " + o.number + "\n" +
       "Supplier: " + o.supplier + "\n" +
       "Job #: " + o.jobNumber + (o.jobName ? " - " + o.jobName : "") + "\n" +
@@ -1580,7 +1586,7 @@
     return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
   }
   function orderCsv(o) {
-    var p = o.showPricing;
+    var p = o.showPricing && !hidePrices();
     var rows = [["Order #", o.number], ["Supplier", o.supplier], ["Job #", o.jobNumber], ["Job name", o.jobName], ["Date", fmtDate(o.createdAt)],
       ["Requested by", o.requestedBy], ["Needed by", o.needBy ? fmtDate(o.needBy) : ""],
       ["Delivery", o.delivery === "pickup" ? "Will call / pickup" : "Deliver to job: " + (o.deliverTo || "")], ["Notes", o.notes], []];
@@ -1601,7 +1607,7 @@
   }
 
   function printHtml(o) {
-    var p = o.showPricing;
+    var p = o.showPricing && !hidePrices();
     var h = '<div class="po"><div class="po-brand"><img src="assets/kim-logo.png" alt="Kim Industries">' +
       '<div class="po-title"><h1>Material Order</h1><div>Order # <b>' + esc(orderNo(o)) + "</b></div><div>Date: " + esc(fmtDate(o.createdAt)) + "</div></div></div>" +
       '<div class="po-rule"></div><div class="po-head"><div>' +
@@ -1646,7 +1652,7 @@
     return loadLogo().then(function (logo) {
       var BLUE = [27, 117, 188], RED = [237, 28, 36], INK = [35, 31, 32], GREY = [95, 105, 118];
       var doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
-      var W = doc.internal.pageSize.getWidth(), M = 40, p = o.showPricing;
+      var W = doc.internal.pageSize.getWidth(), M = 40, p = o.showPricing && !hidePrices();
       var lw = 92, lh = lw * logo.h / logo.w;
       doc.addImage(logo.url, "PNG", M, 30, lw, lh);
       doc.setTextColor.apply(doc, INK);
@@ -2594,11 +2600,17 @@
 
   // ----- vendor invoices & approval
   function canReviewInvoices() { return Cloud.enabled && !!Cloud.user && !access().blocked && !isField() && (access().role === "admin" || !!access().can_review_invoices); }
-  // Invoices for jobs outside your divisions are hidden (the database does the same once each invoice's job # is saved).
+  // Non-admins only see invoices for jobs in their divisions (no divisions = none; no job yet = admin only),
+  // plus invoices they uploaded themselves. The database enforces the same rule.
   function getInvoices() {
     var all = store.get("invoices", []);
-    if (!jobsLimited()) return all;
-    return all.filter(function (i) { var j = i.job_number || invJob(i); return !j || canSeeJob(j); });
+    if (isAdmin()) return all;
+    var me = Cloud.user ? String(Cloud.user.email || "").toLowerCase() : "", mine = myDivisions();
+    return all.filter(function (i) {
+      if (String(i.uploaded_by || "").toLowerCase() === me) return true;
+      var j = i.job_number || invJob(i);
+      return !!j && mine.indexOf(jobDivision(j)) >= 0;
+    });
   }
   function currentInvoice() { return getInvoices().filter(function (x) { return x.id === state.invoiceId; })[0] || null; }
   var INV_STATUS = {
@@ -2680,6 +2692,8 @@
     h += '<main class="page">';
     if (!canReviewInvoices()) return h + '<div class="empty">Only admins and people with invoice permission can see invoices.</div></main>';
     if (store.get("invoicesSetupMissing", false)) h += '<div class="notice"><b>Database setup not finished.</b> Run <code>supabase/invoices.sql</code> once in Supabase, then reopen this screen.</div>';
+    if (!isAdmin()) h += '<p class="hint" style="margin-top:0">' + (myDivisions().length ? "Showing invoices for Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().join(", ")) + " jobs, plus ones you uploaded."
+      : "You don't have a division yet, so you only see invoices you upload. Ask an admin to assign your divisions.") + "</p>";
     h += '<button class="btn primary big block" data-action="inv-upload">' + ICON.plus + "Upload invoices</button>" +
       '<input type="file" id="inv-file" accept="application/pdf,image/*" multiple hidden>' +
       '<p class="hint">PDF or a photo. The AI reads each invoice, finds the matching order and flags any line whose price doesn\'t match.</p>';

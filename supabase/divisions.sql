@@ -5,8 +5,9 @@
 --   admin - everything, every division.
 --   user  - creates orders; reviews invoices / edits shop stock if those are ticked. Sees only their divisions' jobs.
 --   field - creates orders and looks at shop stock. Nothing else. Sees only their divisions' jobs.
--- A user with no divisions assigned is not limited (sees every division), so nothing changes until an admin assigns divisions.
--- Until the jobs list has at least one job, no one is limited.
+-- Orders: a user with no divisions assigned is not limited, and until the jobs list has at least one job no one is limited.
+-- Invoices: non-admins only see invoices whose job is in their divisions (plus ones they uploaded themselves).
+--   No divisions = no invoices. Invoices with no job # yet are admin-only.
 
 -- ---------------------------------------------------------------- jobs
 create table if not exists public.jobs (
@@ -59,14 +60,17 @@ language sql stable security definer set search_path = public as $$
                  and (role = 'admin' or (role = 'user' and can_review_invoices)))
 $$;
 
--- Invoice visibility: its job (stored, or from the matched order) must be in the person's divisions.
--- Invoices whose job isn't known yet stay visible to every invoice reviewer so they can be sorted out.
-create or replace function public.can_see_invoice(p_job text, p_order text) returns boolean
+-- Invoice visibility (non-admins): its job (stored, or from the matched order) must be in the person's divisions.
+-- No divisions = no invoices; invoices with no job yet are admin-only. The uploader keeps seeing their own upload
+-- (it has no job while it's being read).
+drop policy if exists "invoices read"   on public.invoices;
+drop policy if exists "invoices update" on public.invoices;
+drop function if exists public.can_see_invoice(text, text);
+create or replace function public.can_see_invoice(p_job text, p_order text, p_uploader text) returns boolean
 language sql stable security definer set search_path = public as $$
-  select case
-    when coalesce(nullif(btrim(p_job), ''), (select job_number from orders where id = p_order)) is null then true
-    else can_see_job(coalesce(nullif(btrim(p_job), ''), (select job_number from orders where id = p_order)))
-  end
+  select is_admin()
+      or coalesce(p_uploader, '') = current_email()
+      or job_division(coalesce(nullif(btrim(p_job), ''), (select job_number from orders where id = p_order))) = any(my_divisions())
 $$;
 
 -- ---------------------------------------------------------------- policies
@@ -99,10 +103,10 @@ create policy "orders delete" on public.orders for delete to authenticated
 drop policy if exists "invoices read"   on public.invoices;
 drop policy if exists "invoices insert" on public.invoices;
 drop policy if exists "invoices update" on public.invoices;
-create policy "invoices read"   on public.invoices for select to authenticated using (can_review_invoices() and can_see_invoice(job_number, order_id));
+create policy "invoices read"   on public.invoices for select to authenticated using (can_review_invoices() and can_see_invoice(job_number, order_id, uploaded_by));
 create policy "invoices insert" on public.invoices for insert to authenticated with check (can_review_invoices());
 create policy "invoices update" on public.invoices for update to authenticated
-  using (can_review_invoices() and can_see_invoice(job_number, order_id)) with check (can_review_invoices());
+  using (can_review_invoices() and can_see_invoice(job_number, order_id, uploaded_by)) with check (can_review_invoices());
 
 -- Check: jobs per division, and each person's type and divisions.
 select division, count(*) as jobs from public.jobs group by division order by division;

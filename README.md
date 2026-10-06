@@ -88,12 +88,17 @@ from the list.
 **User types** (Users & Permissions):
 - **Admin**: everything, every division.
 - **Regular user**: creates orders; reviews invoices and/or edits shop stock when those boxes are ticked.
-- **Field view**: creates orders and looks at shop stock. No price lookup, invoices, pricing or shop changes.
+- **Field view**: creates orders and looks at shop stock. Never sees prices (their orders go out without pricing), and has no
+  price lookup, invoices, special pricing or shop changes.
 
-Each regular / field user gets one or more **divisions**. They then only see orders and invoices for their divisions' jobs
-(plus orders they created themselves) and can only start orders on those jobs; the job # step suggests their jobs and fills
-in the job name. Invoices whose job isn't known yet stay visible to every invoice reviewer. Someone with **no divisions
-ticked is not limited**, and nobody is limited until at least one job has been added, so nothing changes until you set it up.
+Each regular / field user gets one or more **divisions**.
+- **Orders:** they only see orders for their divisions' jobs (plus orders they created) and can only start orders on those
+  jobs; the job # step suggests their jobs and fills in the job name. Someone with no divisions ticked can order for any job,
+  and nobody is limited until at least one job has been added.
+- **Invoices:** non-admins only see invoices whose job is in their divisions, plus invoices they uploaded themselves.
+  No divisions = no invoices. Invoices with no job # yet are visible to admins only.
+- **Shop stock** is visible to everyone, whatever their division.
+
 The database enforces all of this, not just the app.
 
 **One-time setup:** run [`supabase/divisions.sql`](supabase/divisions.sql) (after `invoices.sql`).
