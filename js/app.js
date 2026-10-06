@@ -2824,6 +2824,19 @@
     var pl = (store.get("invPL", {})[i.id] || {}).job;
     return jobKey(pl != null && pl !== "" ? pl : guessInvoiceJob(i));
   }
+  // "Job 3425 · Amazon Fusion · Div 200" for an invoice (from its order, saved job #, or references).
+  function invJobText(i) {
+    var j = invJob(i);
+    if (!j) return "";
+    var r = jobsByKey()[j], o = orderForInvoice(i);
+    var name = (r && r.job_name) || (o && o.jobName) || "";
+    return "Job " + j + (name ? " · " + name : "") + (r ? " · Div " + r.division : " · not on the jobs list");
+  }
+  function invJobHtml(i) {
+    var t = invJobText(i);
+    return (t ? esc(t.replace(/^Job /, "")) : '<span class="neg">Not known yet</span>') +
+      ' <button class="link-btn" style="color:var(--focus);min-height:0;padding:0 4px" data-action="inv-set-job">' + (t ? "Change" : "Set job") + "</button>";
+  }
   function invMatchesFilter(i) {
     var f = invFlt();
     if (f.supplier && invSupplierName(i) !== f.supplier) return false;
@@ -2883,6 +2896,7 @@
     return '<button class="tile inv-tile ' + st + (sel && sel[i.id] ? " picked" : "") + '" data-action="' + (sel ? "inv-toggle-sel" : "open-invoice") + '" data-id="' + esc(i.id) + '">' +
       (sel ? '<span class="inv-check" aria-hidden="true">' + (sel[i.id] ? "✓" : "") + "</span>" : "") + '<div class="t-main">' +
       '<div class="t-title">' + esc(i.vendor_name || i.supplier || i.file_name || "Invoice") + (i.invoice_number ? " · #" + esc(i.invoice_number) : "") + "</div>" +
+      (invJob(i) ? '<div class="t-sub"><b>' + esc(invJobText(i)) + "</b></div>" : "") +
       '<div class="t-sub">' + (i.invoice_date ? "Invoice date " + esc(i.invoice_date) + " · " : "") + (i.order_number ? "Order " + esc(i.order_number) : i.status === "processing" ? "Reading invoice…" : "No order matched") +
       (i.total != null ? " · " + fmtMoney(i.total) : "") + "</div>" +
       '<div class="t-sub">' + invBadge(st) + (nBad ? ' <b class="neg">' + nBad + " line" + (nBad === 1 ? "" : "s") + " flagged</b>" : "") +
@@ -3070,6 +3084,7 @@
       "<dt>Vendor</dt><dd>" + esc(inv.vendor_name || "-") + (inv.supplier ? " (" + esc(inv.supplier) + ")" : "") + "</dd>" +
       "<dt>Invoice #</dt><dd>" + esc(inv.invoice_number || "-") + "</dd>" +
       "<dt>Date</dt><dd>" + esc(inv.invoice_date || "-") + "</dd>" +
+      "<dt>Job</dt><dd>" + invJobHtml(inv) + "</dd>" +
       (ex.po_number ? "<dt>PO / ref</dt><dd>" + esc(ex.po_number) + "</dd>" : "") +
       "<dt>Total</dt><dd>" + (inv.total != null ? fmtMoney(inv.total) : "-") + (ex.freight || ex.tax ? " (" + [ex.freight ? "freight/FSC " + fmtMoney(ex.freight) : "", ex.tax ? "tax " + fmtMoney(ex.tax) : ""].filter(Boolean).join(", ") + ")" : "") + "</dd>" +
       (ex.read_by ? "<dt>Read by</dt><dd>" + esc(ex.read_by) + "</dd>" : "") +
@@ -4050,6 +4065,29 @@
     },
     "inv-send-back": function () { openSendBackSheet(currentInvoice()); },
     "inv-add-items": function (el) { openAddItemsSheet(currentInvoice(), el.getAttribute("data-line")); },
+    "inv-set-job": function () {
+      var inv = currentInvoice(), cur = invJob(inv), o = orderForInvoice(inv);
+      var opts = (isAdmin() ? getJobs() : myJobs()).slice().sort(function (a, b) { return a.job_number.localeCompare(b.job_number, undefined, { numeric: true }); });
+      openSheet("<h2>Job for this invoice</h2>" +
+        (o ? '<p class="hint" style="margin-top:0">This invoice is matched to order ' + esc(o.number || "") + " (Job " + esc(o.jobNumber) + "). The order's job is used while it's matched.</p>" : "") +
+        '<label class="field"><span>Job #</span><input class="input" id="sj-job" list="sj-list" autocapitalize="characters" value="' + esc(cur) + '" placeholder="e.g. 3425"></label>' +
+        '<datalist id="sj-list">' + opts.map(function (j) { return '<option value="' + esc(j.job_number) + '">' + esc((j.job_name || "") + " · Div " + j.division) + "</option>"; }).join("") + "</datalist>" +
+        '<div class="hint" id="sj-info"></div>' +
+        '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="sj-save">Save</button></div>', function (sheet) {
+        var inp = sheet.querySelector("#sj-job"), info = sheet.querySelector("#sj-info");
+        var show = function () { var r = jobsByKey()[jobKey(inp.value)]; info.textContent = r ? (r.job_name || "") + " · Division " + r.division : inp.value.trim() ? "Not on the jobs list" : ""; };
+        inp.addEventListener("input", show); show();
+        sheet.querySelector("#sj-save").addEventListener("click", function (e) {
+          var j = jobKey(inp.value);
+          if (!j) { inp.focus(); return; }
+          var m = store.get("invPL", {}); m[inv.id] = Object.assign({}, m[inv.id] || {}, { job: j }); store.set("invPL", m);
+          e.target.disabled = true;
+          Cloud.updateInvoice(inv.id, { job_number: j }).then(refreshInvoices, function () { /* column not added yet: kept on this device */ }).then(function () {
+            closeSheet(); toast("Job " + j + " set"); var y = window.scrollY; render(); window.scrollTo(0, y);
+          });
+        });
+      });
+    },
     "inv-pricelist": function () { state.invPLOpen = currentInvoice().id; render(); },
     "inv-stop": function () {
       var inv = currentInvoice();
