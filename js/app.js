@@ -2897,7 +2897,53 @@
           return addSummaryPages(L, out, included, skipped, title || "Invoices").then(function () { return out.save(); });
         });
       });
-    }).then(function (bytes) { return { blob: new Blob([bytes], { type: "application/pdf" }), skipped: skipped }; });
+    }).then(function (bytes) { return { blob: new Blob([bytes], { type: "application/pdf" }), skipped: skipped, included: included }; });
+  }
+  // Combined PDF is ready: email it (prefilled like the incorrect-invoice email) or just download it.
+  function openCombinedPdfSheet(file, list, skipped, tabName) {
+    var t = invTotals(list), n = list.length;
+    var subject = "Invoices - " + tabName + " - " + n + " invoice" + (n === 1 ? "" : "s") + " - " + fmtMoney(t.total);
+    var body = "Hello,\n\nAttached " + (n === 1 ? "is 1 invoice" : "are " + n + " invoices") + " (" + tabName.toLowerCase() + ") in one PDF.\n\n" +
+      "Invoice total: " + fmtMoney(t.total) + (t.noTotal ? " (" + t.noTotal + " without a total)" : "") + "\n" +
+      (t.over > 0 ? "Overbilled: " + fmtMoney(t.over) + " on " + t.overCount + " invoice" + (t.overCount === 1 ? "" : "s") + "\n" : "") + "\n" +
+      list.map(function (i) {
+        var o = invOverbilled(i), j = invJob(i);
+        return "- " + invSupplierName(i) + (i.invoice_number ? " #" + i.invoice_number : "") + (i.invoice_date ? ", " + i.invoice_date : "") + (j ? ", Job " + j : "") +
+          ": " + (i.total != null ? fmtMoney(i.total) : "no total") + (o > 0 ? " (overbilled " + fmtMoney(o) + ")" : "");
+      }).join("\n") + "\n\n" +
+      (skipped.length ? "Not included (file couldn't be read): " + skipped.join("; ") + "\n\n" : "") +
+      "Thank you,\n" + (myName() || "") + "\nKim Industries";
+    var canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    var h = "<h2>Combined PDF ready</h2>" +
+      '<p class="hint" style="margin-top:0"><b>' + esc(file.name) + "</b> · " + n + " invoice" + (n === 1 ? "" : "s") + " · total " + fmtMoney(t.total) +
+      (t.over > 0 ? ' · <b class="neg">overbilled ' + fmtMoney(t.over) + "</b>" : "") + "</p>" +
+      (skipped.length ? '<div class="notice"><b>Left out (file couldn\'t be read):</b><br>' + skipped.map(esc).join("<br>") + "</div>" : "") +
+      '<label class="field"><span>To</span><input class="input" id="cp-to" type="email" multiple value="' + esc(store.get("invPdfTo", "")) + '" placeholder="email address(es)"></label>' +
+      '<label class="field"><span>Subject</span><input class="input" id="cp-subject" value="' + esc(subject) + '"></label>' +
+      '<label class="field"><span>Message</span><textarea class="input" id="cp-body" style="min-height:200px">' + esc(body) + "</textarea></label>" +
+      '<div class="btn-row" style="margin-top:12px">' +
+      (canShare ? '<button class="btn primary" id="cp-share">Open email with the PDF</button>' : "") +
+      '<button class="btn' + (canShare ? "" : " primary") + '" id="cp-mail">' + (canShare ? "Download + email draft" : "Download PDF + open email") + "</button></div>" +
+      '<p class="hint" style="font-size:13px">' + (canShare ? "Choose your email app, check the message, and send." : "Your email app opens with the subject and message filled in. Attach the downloaded PDF, then send.") + "</p>" +
+      '<div class="btn-row"><button class="btn" data-action="close-sheet">Close</button><button class="btn" id="cp-dl">Just download</button></div>';
+    openSheet(h, function (sheet) {
+      var v = function (id) { return sheet.querySelector(id).value; };
+      var remember = function () { store.set("invPdfTo", v("#cp-to").trim()); };
+      var share = sheet.querySelector("#cp-share");
+      if (share) share.addEventListener("click", function () {
+        remember();
+        navigator.share({ files: [file], title: v("#cp-subject"), text: v("#cp-body") }).then(function () { closeSheet(); toast("PDF shared"); },
+          function (e) { if (!(e && e.name === "AbortError")) toast(e && e.message || "Couldn't open the share sheet"); });
+      });
+      sheet.querySelector("#cp-mail").addEventListener("click", function () {
+        remember();
+        downloadBlob(file, file.name);
+        var to = v("#cp-to").trim(), sub = v("#cp-subject"), b = v("#cp-body");
+        setTimeout(function () { location.href = "mailto:" + encodeURIComponent(to).replace(/%2C/g, ",") + "?subject=" + encodeURIComponent(sub) + "&body=" + encodeURIComponent(b); }, 400);
+        setTimeout(function () { closeSheet(); toast("Attach the downloaded PDF to the email"); }, 1200);
+      });
+      sheet.querySelector("#cp-dl").addEventListener("click", function () { downloadBlob(file, file.name); closeSheet(); toast("PDF downloaded"); });
+    });
   }
   function orderForInvoice(inv) { return inv && inv.order_id ? getOrder(inv.order_id) : null; }
 
@@ -3667,14 +3713,8 @@
       var tabName = { approved: "Approved", sent_back: "Rejected", matched: "Matched", attention: "Needs review", all: "All" }[f] || "Selected";
       var name = "Invoices - " + tabName + " - " + new Date().toISOString().slice(0, 10) + ".pdf";
       exportInvoicesPdf(list, tabName + " invoices").then(function (r) {
-        var file = new File([r.blob], name, { type: "application/pdf" });
-        var note = list.length - r.skipped.length + " invoice" + (list.length - r.skipped.length === 1 ? "" : "s") + " in one PDF";
-        if (r.skipped.length) alert("Left out of the PDF:\n" + r.skipped.join("\n"));
         state.invSel = null; render();
-        if (navigator.canShare && navigator.canShare({ files: [file] }) && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-          navigator.share({ files: [file], title: name }).then(null, function () { downloadBlob(file, name); });
-        } else downloadBlob(file, name);
-        toast(note);
+        openCombinedPdfSheet(new File([r.blob], name, { type: "application/pdf" }), r.included, r.skipped, tabName);
       }, function (e) { el.disabled = false; el.textContent = "Combined PDF"; alert(e.message || "Couldn't build the PDF"); });
     },
     "open-invoice": function (el) { go("invoice", { invoiceId: el.getAttribute("data-id") }); },
