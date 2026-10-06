@@ -134,7 +134,30 @@
   function getStock() { return store.get("stock", []); }
   function access() { return store.get("access", { role: "user", can_edit_shop: false, blocked: false }); }
   function isAdmin() { return Cloud.enabled && !!Cloud.user && access().role === "admin"; }
-  function canEditShop() { return Cloud.enabled && !!Cloud.user && (access().role === "admin" || !!access().can_edit_shop) && !access().blocked; }
+  // Field users: create orders and look at shop stock, nothing else.
+  function isField() { return Cloud.enabled && !!Cloud.user && access().role === "field"; }
+  function canEditShop() { return Cloud.enabled && !!Cloud.user && !isField() && (access().role === "admin" || !!access().can_edit_shop) && !access().blocked; }
+
+  // ----- jobs by division. Non-admins with divisions assigned only see / order on their divisions' jobs
+  // (the database enforces the same rule). No divisions assigned, or no jobs uploaded yet = not limited.
+  function getJobs() { return store.get("jobs", []); }
+  var jobIdx = null;
+  function jobsByKey() {
+    if (!jobIdx) { jobIdx = {}; getJobs().forEach(function (j) { jobIdx[jobKey(j.job_number)] = j; }); }
+    return jobIdx;
+  }
+  function setJobs(list) { store.set("jobs", list); jobIdx = null; }
+  function refreshJobs() {
+    if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    return Cloud.listJobs().then(function (l) { setJobs(l); store.set("jobsSetupMissing", false); }, function (e) {
+      if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) store.set("jobsSetupMissing", true);
+    });
+  }
+  function myDivisions() { return (access().divisions || []).map(String); }
+  function jobsLimited() { return Cloud.enabled && !!Cloud.user && !isAdmin() && myDivisions().length > 0 && getJobs().length > 0; }
+  function jobDivision(j) { var r = jobsByKey()[jobKey(j)]; return r ? String(r.division) : ""; }
+  function canSeeJob(j) { return !jobsLimited() || myDivisions().indexOf(jobDivision(j)) >= 0; }
+  function myJobs() { return getJobs().filter(function (j) { return j.active !== false && canSeeJob(j.job_number); }); }
 
   // Shop stock is tracked per MATERIAL, not per supplier item: the same 1/2" x 1" JM fiberglass
   // pipe covering bought from CT-DI, CT-SPI or CT-Homans is one material in the shop.
@@ -448,6 +471,7 @@
         return Cloud.getMyAccess().then(function (a) { store.set("access", a); }, function () { /* keep cached */ }).then(function () { return Promise.all([
           Cloud.getSupplierEmails().then(function (m) { store.set("supplierEmails", m); }, function () { /* keep cached */ }),
           refreshStock(),
+          refreshJobs(),
           refreshBooks(),
           refreshInvoices().then(autoRetryInvoices),
           sendCatalogRequests().then(refreshCatalog)
@@ -463,7 +487,7 @@
       .then(function () {
         sync.running = false;
         if (sync.again) { sync.again = false; scheduleSync(300); }
-        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book" || state.view === "invoices" || state.view === "catalog-requests") render();
+        if (state.view === "home" || state.view === "history" || state.view === "shop" || state.view === "pricing" || state.view === "pricing-job" || state.view === "book" || state.view === "invoices" || state.view === "catalog-requests" || state.view === "jobs") render();
         else if ((state.view === "build" || state.view === "review") && repriceOrder(currentOrder())) render();
         else if (state.view === "send") render();
         else if (state.view === "review") refreshOrderNumber();
@@ -655,15 +679,18 @@
     h += '<div class="home-actions">' +
       '<button class="btn primary big block" data-action="new-order">' + ICON.plus + "New Material Order</button>" +
       '<div class="btn-row">' +
-      '<button class="btn" data-action="lookup">' + ICON.tag + "Price Lookup</button>" +
+      (isField() ? "" : '<button class="btn" data-action="lookup">' + ICON.tag + "Price Lookup</button>") +
       '<button class="btn" data-action="history">' + ICON.list + "Order History</button>" +
       (Cloud.enabled ? '<button class="btn" data-action="shop">' + ICON_SHOP + "Shop Stock</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
+      (isAdmin() ? '<button class="btn" data-action="jobs">' + ICON.list + "Jobs &amp; Divisions</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="pricing">' + ICON.tag + "Special Pricing</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="catalog-requests">' + ICON.tag + "Price-list Requests" + (pendingCatalogRequests().length ? " (" + pendingCatalogRequests().length + ")" : "") + "</button>" + '<button class="btn" data-action="edit-products">' + ICON.tag + "Edit Products</button>" : "") +
       (canReviewInvoices() ? '<button class="btn" data-action="invoices">' + ICON.list + "Invoice Approval</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
+    if (jobsLimited()) h += '<p class="hint" style="margin:0 0 10px">' + (isField() ? "Field view · " : "") + "Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().join(", ")) + "</p>";
+    else if (isField()) h += '<p class="hint" style="margin:0 0 10px">Field view</p>';
     h += setupBanner();
     var pulls = canEditShop() ? pendingPulls() : [];
     var catPending = isAdmin() ? pendingCatalogRequests().length : 0;
@@ -710,14 +737,16 @@
   // ----- step 2: job number
   VIEWS.job = function () {
     var d = state.draft || {};
-    var recent = recentJobs();
+    var recent = recentJobs().filter(function (j) { return canSeeJob(j.jobNumber); });
     var h = topbar("New Material Order", "Step 2 of 2 · " + d.supplier, backBtn("to-supplier"));
     h += '<main class="page"><div class="step">Step 2 of 2</div><h2>Enter the job number</h2>' +
       '<p class="hint">Ordering from <b>' + esc(d.supplier) + '</b>. <button class="link-btn" style="color:var(--focus);min-height:0;padding:0" data-action="to-supplier">Change</button></p>' +
       '<form id="job-form" novalidate>' +
       '<label class="field"><span>Job number <span class="req">*</span></span>' +
       '<input class="input huge" id="job-number" name="jobNumber" autocomplete="off" autocapitalize="characters" enterkeyhint="next" required value="' + esc(d.jobNumber || "") + '" placeholder="e.g. 24-118">' +
-      '<div class="error-text" id="job-error" hidden>Job number is required.</div></label>';
+      '<div class="error-text" id="job-error" hidden>Job number is required.</div></label>' +
+      (getJobs().length ? '<div id="job-suggest" class="job-suggest"></div>' : "") +
+      (jobsLimited() ? '<p class="hint" style="margin:-4px 0 10px">You can order for Division' + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().join(", ")) + " jobs.</p>" : "");
     if (recent.length) {
       h += '<div class="hint" style="margin:-6px 0 0">Recent jobs</div><div class="chips">';
       recent.forEach(function (j) {
@@ -732,22 +761,43 @@
     return h;
   };
   AFTER.job = function () {
-    var input = document.getElementById("job-number");
+    var input = document.getElementById("job-number"), nameIn = document.getElementById("job-name"), err = document.getElementById("job-error");
+    var box = document.getElementById("job-suggest");
     if (!input.value) input.focus();
+    // Jobs from the jobs list (your divisions only), matching what's typed.
+    function suggest() {
+      if (!box) return;
+      var q = jobKey(input.value), mine = myJobs();
+      var hits = mine.filter(function (j) { return !q || j.job_number.indexOf(q) >= 0 || String(j.job_name || "").toUpperCase().indexOf(q) >= 0; })
+        .sort(function (a, b) { return (b.job_number.indexOf(q) === 0) - (a.job_number.indexOf(q) === 0) || a.job_number.localeCompare(b.job_number, undefined, { numeric: true }); });
+      if (q && hits.length === 1 && hits[0].job_number === q) { box.innerHTML = ""; return; }
+      box.innerHTML = hits.length ? '<div class="hint" style="margin:0 0 6px">' + (q ? "Matching jobs" : jobsLimited() ? "Your jobs" : "Jobs") + "</div>" +
+        hits.slice(0, 8).map(function (j) {
+          return '<button type="button" class="tile job-pick" data-action="pick-job" data-job="' + esc(j.job_number) + '" data-name="' + esc(j.job_name || "") + '"><div class="t-main"><div class="t-title">' +
+            esc(j.job_number) + (j.job_name ? " · " + esc(j.job_name) : "") + '</div><div class="t-sub">Division ' + esc(j.division) + "</div></div></button>";
+        }).join("") + (hits.length > 8 ? '<div class="hint">' + (hits.length - 8) + " more - keep typing</div>" : "")
+        : (q && jobsLimited() ? '<div class="hint">No job ' + esc(q) + " in your division" + (myDivisions().length === 1 ? "" : "s") + ".</div>" : "");
+    }
+    suggest();
     document.getElementById("job-form").addEventListener("submit", function (e) {
       e.preventDefault();
       var num = input.value.trim();
-      if (!num) {
-        input.classList.add("invalid");
-        document.getElementById("job-error").hidden = false;
-        input.focus();
-        return;
+      function bad(msg) { input.classList.add("invalid"); err.textContent = msg; err.hidden = false; input.focus(); }
+      if (!num) return bad("Job number is required.");
+      var known = jobsByKey()[jobKey(num)];
+      if (jobsLimited() && !canSeeJob(num)) {
+        return bad(known ? "Job " + known.job_number + " is in Division " + known.division + ", not yours. Ask an admin if you need it."
+          : "Job " + jobKey(num) + " isn't in the jobs list for your division" + (myDivisions().length === 1 ? "" : "s") + ". Ask an admin to add it.");
       }
-      createOrder(state.draft.supplier, num, document.getElementById("job-name").value.trim());
+      if (known) num = known.job_number;
+      createOrder(state.draft.supplier, num, nameIn.value.trim() || (known && known.job_name) || "");
     });
     input.addEventListener("input", function () {
       input.classList.remove("invalid");
-      document.getElementById("job-error").hidden = true;
+      err.hidden = true;
+      var known = jobsByKey()[jobKey(input.value)];
+      if (known && known.job_name && !nameIn.value.trim()) nameIn.value = known.job_name;
+      suggest();
     });
   };
 
@@ -2543,8 +2593,13 @@
   }
 
   // ----- vendor invoices & approval
-  function canReviewInvoices() { return Cloud.enabled && !!Cloud.user && !access().blocked && (access().role === "admin" || !!access().can_review_invoices); }
-  function getInvoices() { return store.get("invoices", []); }
+  function canReviewInvoices() { return Cloud.enabled && !!Cloud.user && !access().blocked && !isField() && (access().role === "admin" || !!access().can_review_invoices); }
+  // Invoices for jobs outside your divisions are hidden (the database does the same once each invoice's job # is saved).
+  function getInvoices() {
+    var all = store.get("invoices", []);
+    if (!jobsLimited()) return all;
+    return all.filter(function (i) { var j = i.job_number || invJob(i); return !j || canSeeJob(j); });
+  }
   function currentInvoice() { return getInvoices().filter(function (x) { return x.id === state.invoiceId; })[0] || null; }
   var INV_STATUS = {
     processing: ["busy", "AI checking…"],
@@ -2568,8 +2623,21 @@
   function invBadge(st) { var m = INV_STATUS[st] || ["", st]; return '<span class="inv-badge ' + m[0] + '">' + esc(m[1]) + "</span>"; }
   function refreshInvoices() {
     if (!canReviewInvoices() || !navigator.onLine) return Promise.resolve();
-    return Cloud.listInvoices().then(function (list) { store.set("invoices", list); store.set("invoicesSetupMissing", false); }, function (e) {
+    return Cloud.listInvoices().then(function (list) { store.set("invoices", list); store.set("invoicesSetupMissing", false); saveInvoiceJobs(list); }, function (e) {
       if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) store.set("invoicesSetupMissing", true);
+    });
+  }
+  // Save each invoice's job # (from its order, order number, PO / references or price-list check) so the database
+  // can limit invoices by division. Quietly does nothing until supabase/divisions.sql adds the column.
+  function saveInvoiceJobs(list) {
+    if (store.get("invJobColMissing", false) && Date.now() - store.get("invJobColCheck", 0) < 6 * 3600 * 1000) return;
+    var todo = list.filter(function (i) { return i.status !== "processing" && !i.job_number && invJob(i); }).slice(0, 25);
+    var chain = Promise.resolve();
+    todo.forEach(function (i) {
+      chain = chain.then(function () { return Cloud.updateInvoice(i.id, { job_number: invJob(i) }); }).then(function () { i.job_number = invJob(i); });
+    });
+    chain.then(function () { store.set("invJobColMissing", false); }, function (e) {
+      if (/job_number|column|PGRST204|42703/i.test((e && (e.code + " " + e.message)) || "")) { store.set("invJobColMissing", true); store.set("invJobColCheck", Date.now()); }
     });
   }
   // When the AI service was busy, re-run the check by itself a few minutes later (up to 3 times per invoice).
@@ -2714,6 +2782,9 @@
   function invJob(i) {
     var o = orderForInvoice(i);
     if (o && o.jobNumber) return jobKey(o.jobNumber);
+    var pl0 = (store.get("invPL", {})[i.id] || {}).job;
+    if (pl0) return jobKey(pl0);
+    if (i.job_number) return jobKey(i.job_number);
     var m = String(i.order_number || "").match(/^(.+)-\d{3}$/);
     if (m) return jobKey(m[1]);
     var pl = (store.get("invPL", {})[i.id] || {}).job;
@@ -3029,6 +3100,7 @@
         var inv = currentInvoice(), m = store.get("invPL", {});
         m[inv.id] = { supplier: document.getElementById("pl-sup").value, job: document.getElementById("pl-job").value.trim() };
         store.set("invPL", m);
+        if (id === "pl-job" && m[inv.id].job && !inv.order_id) Cloud.updateInvoice(inv.id, { job_number: jobKey(m[inv.id].job) }).then(null, function () { /* column not added yet */ });
         var y = window.scrollY; render(); window.scrollTo(0, y);
       });
     });
@@ -3412,7 +3484,137 @@
     v.price = parseFloat(v.price) || 0;
     return v;
   }
+  // ----- jobs & divisions (admin)
+  // Each job # belongs to one division. Non-admins with divisions only see / order on their divisions' jobs.
+  function divOf(v) {
+    var t = String(v == null ? "" : v).trim(), m = t.match(/\d{3}/);
+    return m ? m[0] : t;
+  }
+  // Rows from a spreadsheet or pasted text -> [{job_number, job_name, division}] plus problems.
+  function jobsFromRows(rows) {
+    rows = rows.map(function (r) { return (r || []).map(function (c) { return c == null ? "" : String(c).trim(); }); }).filter(function (r) { return r.some(Boolean); });
+    var hi = -1, cJob = 0, cName = -1, cDiv = -1;
+    for (var i = 0; i < Math.min(rows.length, 15); i++) {
+      var low = rows[i].map(function (c) { return c.toLowerCase(); });
+      var d = low.findIndex(function (c) { return /div/.test(c); }), j = low.findIndex(function (c) { return /job|project/.test(c) && !/name|desc/.test(c); });
+      if (d >= 0 && j >= 0) { hi = i; cDiv = d; cJob = j; cName = low.findIndex(function (c, k) { return k !== j && k !== d && /name|desc|location|customer|title/.test(c); }); break; }
+    }
+    if (hi < 0) { // no header: job, name, division  or  job, division
+      var w = Math.max.apply(null, rows.map(function (r) { return r.length; }).concat([0]));
+      cJob = 0; cDiv = w >= 3 ? 2 : 1; cName = w >= 3 ? 1 : -1;
+    }
+    var out = [], bad = [], seen = {};
+    rows.slice(hi + 1).forEach(function (r, k) {
+      var job = jobKey(r[cJob]), div = divOf(r[cDiv]);
+      if (!job) return;
+      if (!div) { bad.push("Row " + (hi + k + 2) + ": job " + job + " has no division"); return; }
+      if (seen[job]) return;
+      seen[job] = 1;
+      out.push({ job_number: job, job_name: cName >= 0 ? r[cName] || "" : "", division: div });
+    });
+    return { jobs: out, bad: bad };
+  }
+  VIEWS.jobs = function () {
+    var h = topbar("Jobs & Divisions", "Admin", backBtn("settings", "Settings"), syncPill());
+    h += '<main class="page">';
+    if (!isAdmin()) return h + '<div class="empty">Only an admin can manage jobs.</div></main>';
+    if (store.get("jobsSetupMissing", false)) h += '<div class="notice"><b>Database setup not finished.</b> Run <code>supabase/divisions.sql</code> once in Supabase (SQL Editor → New query → paste → Run), then reopen this screen.</div>';
+    var jobs = getJobs(), f = state.jobsDiv || "", q = jobKey(state.jobsQ || "");
+    var divs = DIVISIONS.slice();
+    jobs.forEach(function (j) { if (divs.indexOf(String(j.division)) < 0) divs.push(String(j.division)); });
+    h += '<p class="hint" style="margin-top:0">Every job # belongs to a division. People are given divisions under <b>Users &amp; Permissions</b> and only see and order on those divisions\' jobs. Admins see everything.</p>';
+    h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a job</h2><form id="job-add" autocomplete="off"><div class="filters">' +
+      '<label class="field"><span>Job # <span class="req">*</span></span><input class="input" name="job" required autocapitalize="characters" placeholder="e.g. 3425"></label>' +
+      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" name="div">' + divs.map(function (d) { return "<option>" + esc(d) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field full"><span>Job name</span><input class="input" name="name" placeholder="optional"></label></div>' +
+      '<button class="btn primary block" type="submit">Save job</button></form>' +
+      '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="jobs-import">Import Excel / CSV</button><button class="btn" data-action="jobs-paste">Paste a list</button></div>' +
+      '<input type="file" id="jobs-file" accept=".xlsx,.xls,.csv,.ods" hidden></div>';
+    var counts = {};
+    jobs.forEach(function (j) { counts[j.division] = (counts[j.division] || 0) + 1; });
+    h += "<h3>Jobs (" + jobs.length + ")</h3>";
+    h += '<div class="chips"><button class="chip' + (!f ? " on" : "") + '" data-action="jobs-div" data-d="">All</button>' +
+      divs.map(function (d) { return '<button class="chip' + (f === d ? " on" : "") + '" data-action="jobs-div" data-d="' + esc(d) + '">Div ' + esc(d) + " (" + (counts[d] || 0) + ")</button>"; }).join("") + "</div>";
+    h += '<input class="input" id="jobs-q" type="search" placeholder="Find a job # or name" value="' + esc(state.jobsQ || "") + '" style="margin-bottom:10px">';
+    var list = jobs.filter(function (j) { return (!f || String(j.division) === f) && (!q || j.job_number.indexOf(q) >= 0 || String(j.job_name || "").toUpperCase().indexOf(q) >= 0); })
+      .sort(function (a, b) { return a.job_number.localeCompare(b.job_number, undefined, { numeric: true }); });
+    h += !jobs.length ? '<div class="empty">No jobs yet. Add them above or import a spreadsheet with columns <b>Job #</b>, <b>Job name</b> and <b>Division</b>.</div>'
+      : !list.length ? '<div class="empty">No jobs match.</div>'
+      : '<div class="tile-list">' + list.slice(0, 300).map(function (j) {
+        return '<div class="card job-row"><div class="t-main"><div class="t-title">' + esc(j.job_number) + (j.job_name ? " · " + esc(j.job_name) : "") + "</div></div>" +
+          '<select class="input job-div" data-job="' + esc(j.job_number) + '" aria-label="Division">' + divs.map(function (d) { return "<option" + (String(j.division) === d ? " selected" : "") + ">" + esc(d) + "</option>"; }).join("") + "</select>" +
+          '<button class="btn small" data-action="job-edit" data-job="' + esc(j.job_number) + '">Edit</button></div>';
+      }).join("") + "</div>" + (list.length > 300 ? '<p class="hint">Showing 300 of ' + list.length + ". Search to narrow it down.</p>" : "");
+    return h + "</main>";
+  };
+  AFTER.jobs = function () {
+    if (!isAdmin()) return;
+    var form = document.getElementById("job-add");
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var job = jobKey(form.job.value);
+      if (!job) { form.job.focus(); return; }
+      var row = { job_number: job, job_name: form.name.value.trim(), division: form.div.value };
+      var ex = jobsByKey()[job];
+      if (ex && String(ex.division) !== row.division && !confirm("Job " + job + " is in Division " + ex.division + ". Move it to Division " + row.division + "?")) return;
+      Cloud.saveJobs([row]).then(refreshJobs).then(function () { toast("Job " + job + " saved (Division " + row.division + ")"); render(); }, function (ex2) { toast(ex2.message); });
+    });
+    var qi = document.getElementById("jobs-q");
+    qi.addEventListener("input", function () { state.jobsQ = qi.value; var pos = qi.selectionStart; render(); var n = document.getElementById("jobs-q"); n.focus(); try { n.setSelectionRange(pos, pos); } catch (er) { /* ignore */ } });
+    document.querySelectorAll(".job-div").forEach(function (sel) {
+      sel.addEventListener("change", function () {
+        var j = jobsByKey()[sel.getAttribute("data-job")];
+        Cloud.saveJobs([{ job_number: j.job_number, job_name: j.job_name, division: sel.value, active: j.active }]).then(refreshJobs)
+          .then(function () { toast("Job " + j.job_number + " moved to Division " + sel.value); render(); }, function (ex) { toast(ex.message); render(); });
+      });
+    });
+    var file = document.getElementById("jobs-file");
+    file.addEventListener("change", function () {
+      var fl = file.files[0]; file.value = "";
+      if (!fl) return;
+      (window.XLSX ? Promise.resolve() : loadScript("js/vendor/xlsx.full.min.js")).then(function () { return fl.arrayBuffer(); }).then(function (buf) {
+        var wb = window.XLSX.read(buf, { type: "array" }), best = null;
+        wb.SheetNames.forEach(function (n) {
+          var r = jobsFromRows(window.XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: "" }));
+          if (!best || r.jobs.length > best.jobs.length) best = r;
+        });
+        openJobsImportSheet(best || { jobs: [], bad: [] }, fl.name);
+      }).then(null, function (ex) { toast("Couldn't read " + fl.name + ": " + (ex.message || ex)); });
+    });
+  };
+  function openJobsImportSheet(res, source) {
+    var by = jobsByKey(), add = 0, move = 0, same = 0;
+    res.jobs.forEach(function (j) { var ex = by[j.job_number]; if (!ex) add++; else if (String(ex.division) !== j.division || (j.job_name && j.job_name !== ex.job_name)) move++; else same++; });
+    var odd = res.jobs.filter(function (j) { return DIVISIONS.indexOf(j.division) < 0; });
+    var h = "<h2>Import jobs</h2><p class=\"hint\" style=\"margin-top:0\">From " + esc(source) + "</p>" +
+      (res.jobs.length ? "<p><b>" + res.jobs.length + "</b> jobs found: " + add + " new, " + move + " changed" + (same ? ", " + same + " already the same" : "") + ".</p>" +
+        '<div class="hint" style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">' +
+        res.jobs.slice(0, 200).map(function (j) { return esc(j.job_number) + (j.job_name ? " · " + esc(j.job_name) : "") + " → Div " + esc(j.division); }).join("<br>") + (res.jobs.length > 200 ? "<br>…" : "") + "</div>"
+        : '<div class="notice">No jobs found. Use columns <b>Job #</b>, <b>Job name</b> and <b>Division</b> (a header row helps), or one job per line: <code>3425, Mercy Hospital, 100</code>.</div>') +
+      (odd.length ? '<div class="notice" style="margin-top:8px">' + odd.length + " job" + (odd.length === 1 ? " has a division" : "s have divisions") + " that aren't 100/200/300/400/450/600/700 (e.g. " + esc(odd[0].job_number + " → " + odd[0].division) + "). They'll be saved as written.</div>" : "") +
+      (res.bad.length ? '<div class="notice" style="margin-top:8px"><b>Skipped:</b><br>' + res.bad.slice(0, 10).map(esc).join("<br>") + (res.bad.length > 10 ? "<br>…" : "") + "</div>" : "") +
+      '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="close-sheet">Cancel</button>' +
+      (res.jobs.length ? '<button class="btn primary" id="ji-save">Save ' + res.jobs.length + " jobs</button>" : "") + "</div>";
+    openSheet(h, function (sheet) {
+      var b = sheet.querySelector("#ji-save");
+      if (b) b.addEventListener("click", function () {
+        b.disabled = true; b.textContent = "Saving…";
+        Cloud.saveJobs(res.jobs.map(function (j) { var ex = by[j.job_number]; return { job_number: j.job_number, job_name: j.job_name || (ex && ex.job_name) || "", division: j.division }; }))
+          .then(refreshJobs).then(function () { closeSheet(); toast(res.jobs.length + " jobs saved"); render(); }, function (ex) { b.disabled = false; b.textContent = "Save"; toast(ex.message); });
+      });
+    });
+  }
+
   // ----- users & permissions (admin)
+  var ROLES = [["user", "Regular user", "Creates orders; can review invoices / edit shop stock if ticked"], ["field", "Field view", "Creates orders and looks at shop stock only"], ["admin", "Admin", "Everything, every division"]];
+  function roleSelectHtml(name, role, attrs) {
+    return '<select class="input" name="' + name + '"' + (attrs || "") + ">" + ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (r[0] === role ? " selected" : "") + ">" + r[1] + "</option>"; }).join("") + "</select>";
+  }
+  function divChecksHtml(sel, attrs) {
+    return '<div class="div-checks">' + DIVISIONS.map(function (d) {
+      return '<label class="div-check"><input type="checkbox" value="' + d + '"' + (sel.indexOf(d) >= 0 ? " checked" : "") + (attrs || "") + ">" + d + "</label>";
+    }).join("") + "</div>";
+  }
   VIEWS.users = function () {
     var h = topbar("Users & Permissions", "Admin", backBtn("settings", "Settings"));
     h += '<main class="page">';
@@ -3420,9 +3622,10 @@
     h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a person</h2><form id="user-form" autocomplete="off">' +
       '<label class="field"><span>Email <span class="req">*</span></span><input class="input" name="email" type="email" required placeholder="name@kimindustries.com"></label>' +
       '<label class="field"><span>Name</span><input class="input" name="name" placeholder="First and last name"></label>' +
-      '<label class="toggle"><input type="checkbox" name="can_edit_shop">Can add / remove shop stock</label>' +
-      '<label class="toggle"><input type="checkbox" name="can_review_invoices">Can review invoices</label>' +
-      '<label class="toggle"><input type="checkbox" name="admin">Admin (can manage users)</label>' +
+      '<label class="field"><span>User type</span>' + roleSelectHtml("role", "user", ' id="nu-role"') + "</label>" +
+      '<div class="field" id="nu-divs"><span>Divisions <small style="color:var(--muted);font-weight:500">(none ticked = all divisions)</small></span>' + divChecksHtml([], ' name="div"') + "</div>" +
+      '<div id="nu-perms"><label class="toggle"><input type="checkbox" name="can_edit_shop">Can add / remove shop stock</label>' +
+      '<label class="toggle"><input type="checkbox" name="can_review_invoices">Can review invoices</label></div>' +
       '<label class="field" style="margin-top:8px"><span>Temporary password (creates their login)</span><input class="input" name="password" type="text" minlength="8" placeholder="At least 8 characters - leave blank if they already have a login"></label>' +
       '<div class="error-text" id="user-error" hidden></div>' +
       '<button class="btn primary block" type="submit">Save person</button></form></div>';
@@ -3432,10 +3635,16 @@
   AFTER.users = function () {
     if (!isAdmin()) return;
     loadUsers();
+    var nr = document.getElementById("nu-role");
+    var syncNew = function () { document.getElementById("nu-perms").hidden = nr.value !== "user"; document.getElementById("nu-divs").hidden = nr.value === "admin"; };
+    nr.addEventListener("change", syncNew); syncNew();
     document.getElementById("user-form").addEventListener("submit", function (e) {
       e.preventDefault();
       var f = e.target, err = document.getElementById("user-error"), btn = f.querySelector("button[type=submit]");
-      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), can_edit_shop: f.can_edit_shop.checked, can_review_invoices: f.can_review_invoices.checked, role: f.admin.checked ? "admin" : "user" };
+      var role = f.role.value;
+      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), role: role,
+        can_edit_shop: role === "user" && f.can_edit_shop.checked, can_review_invoices: role === "user" && f.can_review_invoices.checked,
+        divisions: role === "admin" ? [] : Array.prototype.slice.call(f.querySelectorAll('input[name="div"]:checked')).map(function (c) { return c.value; }) };
       var pw = f.password.value;
       err.hidden = true;
       if (!u.email) { f.email.focus(); return; }
@@ -3465,17 +3674,37 @@
       el.className = "";
       el.innerHTML = list.length ? '<div class="tile-list">' + list.map(function (u) {
         var self = u.email === me;
+        var divs = (u.divisions || []).map(String), em = esc(u.email);
         return '<div class="card user-card' + (u.blocked ? " blocked" : "") + '"><div class="u-head"><div><div class="t-title">' + esc(u.name || u.email.split("@")[0]) +
-          (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
-          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + "</div></div></div>" +
-          '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + esc(u.email) + '"' + (u.can_edit_shop || u.role === "admin" ? " checked" : "") + (u.role === "admin" ? " disabled" : "") + ">Can add / remove shop stock</label>" +
-          '<label class="toggle"><input type="checkbox" data-user-flag="can_review_invoices" data-email="' + esc(u.email) + '"' + (u.can_review_invoices || u.role === "admin" ? " checked" : "") + (u.role === "admin" ? " disabled" : "") + ">Can review invoices</label>" +
-          (self ? "" : '<label class="toggle"><input type="checkbox" data-user-flag="admin" data-email="' + esc(u.email) + '"' + (u.role === "admin" ? " checked" : "") + ">Admin</label>" +
-            '<label class="toggle"><input type="checkbox" data-user-flag="blocked" data-email="' + esc(u.email) + '"' + (u.blocked ? " checked" : "") + ">Turn off access</label>") +
+          (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : u.role === "field" ? ' <span class="badge">Field</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
+          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + (u.role === "admin" ? " · all divisions" : " · " + (divs.length ? "Division" + (divs.length === 1 ? " " : "s ") + esc(divs.join(", ")) : "all divisions (none assigned)")) + "</div></div></div>" +
+          (self ? "" : '<label class="field" style="margin:8px 0 4px"><span>User type</span>' + roleSelectHtml("role", u.role || "user", ' data-user-role="' + em + '"') + "</label>") +
+          (u.role === "admin" ? "" : '<div class="field" style="margin:6px 0"><span>Divisions</span>' + divChecksHtml(divs, ' data-user-div="' + em + '"') + "</div>") +
+          (u.role === "user" ? '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + em + '"' + (u.can_edit_shop ? " checked" : "") + ">Can add / remove shop stock</label>" +
+            '<label class="toggle"><input type="checkbox" data-user-flag="can_review_invoices" data-email="' + em + '"' + (u.can_review_invoices ? " checked" : "") + ">Can review invoices</label>" : "") +
+          (self ? "" : '<label class="toggle"><input type="checkbox" data-user-flag="blocked" data-email="' + em + '"' + (u.blocked ? " checked" : "") + ">Turn off access</label>") +
           '<div class="btn-row"><button class="btn" data-action="user-password" data-email="' + esc(u.email) + '">Reset password</button>' +
           (self ? "" : '<button class="btn danger" data-action="user-remove" data-email="' + esc(u.email) + '">Remove from list</button>') + "</div></div>";
       }).join("") + "</div>" : '<div class="empty">No one added yet.</div>';
-      el.insertAdjacentHTML("beforeend", '<p class="hint" style="font-size:13px">People with a login who aren\'t listed here can order and look up shop stock, but can\'t change it.</p>');
+      el.insertAdjacentHTML("beforeend", '<p class="hint" style="font-size:13px">People with a login who aren\'t listed here are regular users with no divisions: they can order for any job and look up shop stock, but can\'t change it or review invoices.</p>');
+      var findU = function (email) { return state.users.filter(function (x) { return x.email === email; })[0]; };
+      var saveU = function (nu) { Cloud.saveUser(nu).then(function () { toast("Saved"); loadUsers(); }, function (e) { toast(e.message || "Couldn't save"); loadUsers(); }); };
+      el.querySelectorAll("[data-user-role]").forEach(function (sel) {
+        sel.addEventListener("change", function () {
+          var nu = JSON.parse(JSON.stringify(findU(sel.getAttribute("data-user-role"))));
+          nu.role = sel.value;
+          if (nu.role !== "user") { nu.can_edit_shop = false; nu.can_review_invoices = false; }
+          if (nu.role === "admin") nu.divisions = [];
+          saveU(nu);
+        });
+      });
+      el.querySelectorAll("[data-user-div]").forEach(function (cb) {
+        cb.addEventListener("change", function () {
+          var email = cb.getAttribute("data-user-div"), nu = JSON.parse(JSON.stringify(findU(email)));
+          nu.divisions = Array.prototype.slice.call(el.querySelectorAll('[data-user-div="' + email + '"]:checked')).map(function (c) { return c.value; });
+          saveU(nu);
+        });
+      });
       el.querySelectorAll("[data-user-flag]").forEach(function (cb) {
         cb.addEventListener("change", function () {
           var u = state.users.filter(function (x) { return x.email === cb.getAttribute("data-email"); })[0];
@@ -3499,6 +3728,7 @@
     var mine = state.historyMine && Cloud.enabled;
     var q = f.trim().toUpperCase();
     var orders = all.filter(function (o) {
+      if (!canSeeJob(o.jobNumber) && o.createdBy !== me) return false;
       if (mine && o.createdBy !== me) return false;
       if (!q) return true;
       return [o.jobNumber, o.jobName, o.number, o.supplier, o.createdByName].join(" ").toUpperCase().indexOf(q) >= 0;
@@ -3578,7 +3808,7 @@
     if (Cloud.enabled && Cloud.user) {
       h += '<div class="card"><div class="t-sub" style="color:var(--muted)">Signed in as</div><div style="font-weight:700;margin-bottom:4px">' + esc(Cloud.user.email) + "</div>" +
         '<div class="hint" style="margin:0 0 10px">' + (isAdmin() ? "Admin" : canEditShop() ? "Can change shop stock" : "Crew member") + "</div>" +
-        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button><button type="button" class="btn brand" data-action="catalog-requests">Price-list Requests</button><button type="button" class="btn brand" data-action="edit-products">Edit Products</button>' : "") +
+        '<div class="btn-row">' + (isAdmin() ? '<button type="button" class="btn brand" data-action="users">Users &amp; Permissions</button><button type="button" class="btn brand" data-action="jobs">Jobs &amp; Divisions</button><button type="button" class="btn brand" data-action="pricing">Special Pricing</button><button type="button" class="btn brand" data-action="catalog-requests">Price-list Requests</button><button type="button" class="btn brand" data-action="edit-products">Edit Products</button>' : "") +
         '<button type="button" class="btn" data-action="sign-out">Sign out</button></div></div>';
     }
     h += '<div class="card"><label class="field"><span>Your name (shown on orders)</span><input class="input" name="name" autocomplete="name" value="' + esc(s.name || myName()) + '"></label>' +
@@ -3636,7 +3866,37 @@
       if (r) openStockSheet({ key: r.item_key, name: r.item_name, unit: r.unit, category: r.category, model: r.model }, el.getAttribute("data-div"));
     },
     "open-pull": function (el) { openPullSheet(el.getAttribute("data-id")); },
-    "users": function () { go("users"); refreshAccess(); },
+    "users": function () { go("users"); refreshAccess(); refreshJobs(); },
+    "jobs": function () { go("jobs"); refreshAccess(); refreshJobs().then(function () { if (state.view === "jobs") render(); }); },
+    "jobs-div": function (el) { state.jobsDiv = el.getAttribute("data-d"); render(); },
+    "jobs-import": function () { document.getElementById("jobs-file").click(); },
+    "jobs-paste": function () {
+      openSheet('<h2>Paste jobs</h2><p class="hint" style="margin-top:0">One job per line: <b>job #, job name, division</b> (or job #, division). Copying rows from Excel works too.</p>' +
+        '<textarea class="input" id="jp-text" style="min-height:200px" placeholder="3425, Mercy Hospital, 100\n3712, Regeneron B20, 300"></textarea>' +
+        '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="jp-go">Next</button></div>', function (sheet) {
+        sheet.querySelector("#jp-go").addEventListener("click", function () {
+          var rows = sheet.querySelector("#jp-text").value.split(/\r?\n/).map(function (l) { return l.split(/\t|,|;/); });
+          openJobsImportSheet(jobsFromRows(rows), "pasted list");
+        });
+      });
+    },
+    "job-edit": function (el) {
+      var j = jobsByKey()[el.getAttribute("data-job")];
+      if (!j) return;
+      openSheet("<h2>Job " + esc(j.job_number) + "</h2>" +
+        '<label class="field"><span>Job name</span><input class="input" id="je-name" value="' + esc(j.job_name || "") + '"></label>' +
+        '<label class="toggle"><input type="checkbox" id="je-active"' + (j.active !== false ? " checked" : "") + '>Active (shows up when people start an order)</label>' +
+        '<div class="btn-row" style="margin-top:12px"><button class="btn danger" id="je-del">Delete job</button><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="je-save">Save</button></div>', function (sheet) {
+        sheet.querySelector("#je-save").addEventListener("click", function () {
+          Cloud.saveJobs([{ job_number: j.job_number, division: j.division, job_name: sheet.querySelector("#je-name").value.trim(), active: sheet.querySelector("#je-active").checked }])
+            .then(refreshJobs).then(function () { closeSheet(); toast("Saved"); render(); }, function (ex) { toast(ex.message); });
+        });
+        sheet.querySelector("#je-del").addEventListener("click", function () {
+          if (!confirm("Delete job " + j.job_number + "? People in its division won't see its orders any more until it's added back.")) return;
+          Cloud.deleteJob(j.job_number).then(refreshJobs).then(function () { closeSheet(); toast("Job deleted"); render(); }, function (ex) { toast(ex.message); });
+        });
+      });
+    },
     "catalog-requests": function () { go("catalog-requests"); refreshCatalog().then(function () { if (state.view === "catalog-requests") render(); }); },
     "req-approve": function (el) {
       var id = el.getAttribute("data-id"), req = store.get("catalogRequests", []).filter(function (r) { return r.id === id; })[0], v = reqFields(id);
@@ -3842,7 +4102,7 @@
     "settings": function () { go("settings"); refreshAccess(); },
     "history": function () { go("history"); },
     "edit-products": function () { ACTIONS.lookup(); refreshCatalog().then(function () { if (state.view === "lookup") render(); }); },
-    "lookup": function () { go("lookup", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
+    "lookup": function () { if (isField()) return; go("lookup", { mode: "search", query: "", browsePath: [], browseAll: false, sizeA: "", sizeB: "", filterText: "" }); },
     "new-order": function () { state.draft = {}; go("supplier"); },
     "to-supplier": function () { go("supplier"); },
     "pick-supplier": function (el) {
@@ -3967,6 +4227,7 @@
     },
     "duplicate": function () {
       var o = currentOrder();
+      if (!canSeeJob(o.jobNumber)) { toast("Job " + o.jobNumber + " isn't in your division" + (myDivisions().length === 1 ? "" : "s")); return; }
       // Re-price from the current price list where the item still exists.
       var lines = o.lines.map(function (l) {
         var it = l.key && BY_KEY[l.itemKey || l.key];

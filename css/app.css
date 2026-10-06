@@ -436,3 +436,13 @@ details summary { cursor: pointer; padding: 6px 0; }
 .inv-flt .filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 10px; }
 .inv-flt .field { min-width: 0; }
 .inv-flt .input { width: 100%; min-width: 0; box-sizing: border-box; }
+
+/* Jobs & divisions */
+.div-checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.div-check { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-weight: 600; background: var(--surface); }
+.div-check input { width: 18px; height: 18px; margin: 0; }
+.job-row { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin: 0; }
+.job-row .t-main { flex: 1; min-width: 0; }
+.job-row .job-div { width: 84px; flex: none; padding: 6px 8px; min-height: 36px; }
+.job-suggest { margin: -4px 0 12px; }
+.job-suggest .job-pick { width: 100%; margin-bottom: 6px; padding: 10px 12px; text-align: left; }

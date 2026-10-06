@@ -173,7 +173,34 @@
       email: u.email.trim().toLowerCase(), name: u.name || null, role: u.role || "user",
       can_edit_shop: !!u.can_edit_shop, blocked: !!u.blocked, updated_at: new Date().toISOString(),
       can_review_invoices: !!u.can_review_invoices
-    }, { onConflict: "email" }).then(must);
+    }, { onConflict: "email" }).then(must).then(function () {
+      // Divisions are saved separately so this still works before supabase/divisions.sql has been run.
+      if (!u.divisions) return null;
+      return client.from("app_users").update({ divisions: u.divisions }).eq("email", u.email.trim().toLowerCase()).then(must);
+    });
+  };
+
+  // ---------------------------------------------------------------- jobs by division
+
+  Cloud.listJobs = function () {
+    return fetchAll(function () { return client.from("jobs").select("*").order("job_number"); });
+  };
+
+  // rows: [{job_number, job_name, division, active}]
+  Cloud.saveJobs = function (rows) {
+    var now = new Date().toISOString();
+    var payload = rows.map(function (r) {
+      return { job_number: String(r.job_number).trim().toUpperCase(), job_name: r.job_name || null, division: String(r.division).trim(), active: r.active !== false, updated_at: now };
+    });
+    var chain = Promise.resolve();
+    for (var i = 0; i < payload.length; i += 500) {
+      (function (chunk) { chain = chain.then(function () { return client.from("jobs").upsert(chunk, { onConflict: "job_number" }).then(must); }); })(payload.slice(i, i + 500));
+    }
+    return chain;
+  };
+
+  Cloud.deleteJob = function (jobNumber) {
+    return client.from("jobs").delete().eq("job_number", jobNumber).then(must);
   };
 
   Cloud.deleteUser = function (email) {

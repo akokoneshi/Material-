@@ -78,6 +78,26 @@ of stock.
    **Deploy**. Without it, admins can still set permissions in the app, but logins have to be created
    in **Authentication → Users**.
 
+## Jobs, divisions & user types
+
+**Jobs & Divisions** (admin, home screen or Settings) lists every job # and its division (100, 200, 300, 400, 450, 600, 700).
+Add jobs one at a time, **Paste a list** (`job #, job name, division` per line, or rows copied from Excel), or
+**Import Excel / CSV** (columns *Job #*, *Job name*, *Division*; "Div 450" is read as 450). A job's division can be changed
+from the list.
+
+**User types** (Users & Permissions):
+- **Admin**: everything, every division.
+- **Regular user**: creates orders; reviews invoices and/or edits shop stock when those boxes are ticked.
+- **Field view**: creates orders and looks at shop stock. No price lookup, invoices, pricing or shop changes.
+
+Each regular / field user gets one or more **divisions**. They then only see orders and invoices for their divisions' jobs
+(plus orders they created themselves) and can only start orders on those jobs; the job # step suggests their jobs and fills
+in the job name. Invoices whose job isn't known yet stay visible to every invoice reviewer. Someone with **no divisions
+ticked is not limited**, and nobody is limited until at least one job has been added, so nothing changes until you set it up.
+The database enforces all of this, not just the app.
+
+**One-time setup:** run [`supabase/divisions.sql`](supabase/divisions.sql) (after `invoices.sql`).
+
 ## Running / hosting
 
 The app is static files, with no server code and no build step.
