@@ -174,10 +174,21 @@
       can_edit_shop: !!u.can_edit_shop, blocked: !!u.blocked, updated_at: new Date().toISOString(),
       can_review_invoices: !!u.can_review_invoices
     }, { onConflict: "email" }).then(must).then(function () {
-      // Divisions are saved separately so this still works before supabase/divisions.sql has been run.
+      // Divisions / phone are saved separately so this still works before supabase/divisions.sql has been run.
       if (!u.divisions) return null;
       return client.from("app_users").update({ divisions: u.divisions }).eq("email", u.email.trim().toLowerCase()).then(must);
+    }).then(function () {
+      if (u.phone === undefined) return null;
+      return client.from("app_users").update({ phone: u.phone || null }).eq("email", u.email.trim().toLowerCase()).then(must).then(null, function (e) {
+        if (/phone|column|PGRST204|42703/i.test((e && (e.code + " " + e.message)) || "")) throw new Error("Phone numbers need supabase/users_phone.sql run once in Supabase (everything else was saved).");
+        throw e;
+      });
     });
+  };
+
+  // Change the email a person is listed under (their login email is changed by the admin-users function).
+  Cloud.renameUserEmail = function (oldEmail, newEmail) {
+    return client.from("app_users").update({ email: newEmail.trim().toLowerCase(), updated_at: new Date().toISOString() }).eq("email", oldEmail).then(must);
   };
 
   // ---------------------------------------------------------------- jobs by division

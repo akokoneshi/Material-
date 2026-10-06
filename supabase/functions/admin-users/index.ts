@@ -1,4 +1,5 @@
-// Supabase Edge Function: lets an app admin create a login for a new crew member.
+// Supabase Edge Function: lets an app admin create a login for a new crew member, reset a password,
+// or change someone's login email (and name / phone in their profile).
 // Deploy: Dashboard > Edge Functions > (your function) > Code: replace ALL of index.ts with this file,
 // click Deploy, then in the function's Settings turn OFF "Verify JWT" (this code checks the caller itself).
 // The function's name must match adminFunction in js/config.js.
@@ -46,6 +47,29 @@ Deno.serve(async (req) => {
       });
       if (error && !/already/i.test(error.message)) return reply({ error: error.message }, 400);
       return reply({ ok: true, existed: !!error });
+    }
+
+    // Edit a person's login: new email and/or new password (both optional), name / phone kept in their profile.
+    if (body.action === "update") {
+      const newEmail = String(body.new_email || "").trim().toLowerCase();
+      const password = String(body.password || "");
+      if (newEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail)) return reply({ error: "Enter a valid new email" }, 400);
+      if (password && password.length < 8) return reply({ error: "Password must be at least 8 characters" }, 400);
+      const { data: list, error: listErr } = await service.auth.admin.listUsers({ perPage: 1000 });
+      if (listErr) return reply({ error: listErr.message }, 400);
+      const user = list.users.find((u) => (u.email || "").toLowerCase() === email);
+      if (!user) return reply({ ok: true, noLogin: true }); // nothing to change in Auth; the app still updates the person
+      if (newEmail && newEmail !== email && list.users.some((u) => (u.email || "").toLowerCase() === newEmail)) {
+        return reply({ error: "Another login already uses " + newEmail }, 400);
+      }
+      const changes: Record<string, unknown> = {
+        user_metadata: { ...(user.user_metadata || {}), ...(body.name != null ? { full_name: String(body.name) } : {}), ...(body.phone != null ? { phone: String(body.phone) } : {}) },
+      };
+      if (newEmail && newEmail !== email) { changes.email = newEmail; changes.email_confirm = true; }
+      if (password) changes.password = password;
+      const { error } = await service.auth.admin.updateUserById(user.id, changes);
+      if (error) return reply({ error: error.message }, 400);
+      return reply({ ok: true, emailChanged: !!changes.email, passwordChanged: !!password });
     }
 
     if (body.action === "reset-password") {

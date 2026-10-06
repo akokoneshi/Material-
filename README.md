@@ -70,6 +70,11 @@ shop" list. They never appear on the supplier's order, PDF or total. Once the or
 shop permission see it under **Waiting to be pulled**. Tapping **Mark pulled** takes the material out
 of stock.
 
+**Editing people:** each person in Users & Permissions has **Edit** (name, login email, phone, and optionally a new
+password) and **Reset password** (type one or tap **Make one**). Changing someone's email changes the email they sign in with.
+This needs the latest `admin-users` function deployed and the phone column (`supabase/divisions.sql`, or
+`supabase/users_phone.sql` if divisions.sql was already run).
+
 **One-time setup**
 1. **SQL Editor:** run [`supabase/shop.sql`](supabase/shop.sql) after `schema.sql`.
 2. *(Optional, lets admins create logins inside the app.)* **Edge Functions → Deploy a new function →

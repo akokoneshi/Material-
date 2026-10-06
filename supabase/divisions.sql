@@ -22,6 +22,7 @@ create index if not exists jobs_division_idx on public.jobs (division);
 
 -- ---------------------------------------------------------------- user type + divisions
 alter table public.app_users add column if not exists divisions text[] not null default '{}';
+alter table public.app_users add column if not exists phone text;
 alter table public.app_users drop constraint if exists app_users_role_check;
 alter table public.app_users add constraint app_users_role_check check (role in ('admin', 'user', 'field'));
 

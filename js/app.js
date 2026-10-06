@@ -837,7 +837,7 @@
       jobNumber: jobNumber,
       jobName: jobName,
       requestedBy: myName(),
-      phone: s.phone || "",
+      phone: s.phone || access().phone || "",
       needBy: "",
       delivery: "deliver",
       deliverTo: "",
@@ -3674,6 +3674,7 @@
     h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a person</h2><form id="user-form" autocomplete="off">' +
       '<label class="field"><span>Email <span class="req">*</span></span><input class="input" name="email" type="email" required placeholder="name@kimindustries.com"></label>' +
       '<label class="field"><span>Name</span><input class="input" name="name" placeholder="First and last name"></label>' +
+      '<label class="field"><span>Phone</span><input class="input" name="phone" type="tel" placeholder="optional"></label>' +
       '<label class="field"><span>User type</span>' + roleSelectHtml("role", "user", ' id="nu-role"') + "</label>" +
       '<div class="field" id="nu-divs"><span>Divisions <small style="color:var(--muted);font-weight:500">(none ticked = all divisions)</small></span>' + divChecksHtml([], ' name="div"') + "</div>" +
       '<div id="nu-perms"><label class="toggle"><input type="checkbox" name="can_edit_shop">Can add / remove shop stock</label>' +
@@ -3694,7 +3695,7 @@
       e.preventDefault();
       var f = e.target, err = document.getElementById("user-error"), btn = f.querySelector("button[type=submit]");
       var role = f.role.value;
-      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), role: role,
+      var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), role: role, phone: f.phone.value.trim() || undefined,
         can_edit_shop: role === "user" && f.can_edit_shop.checked, can_review_invoices: role === "user" && f.can_review_invoices.checked,
         divisions: role === "admin" ? [] : Array.prototype.slice.call(f.querySelectorAll('input[name="div"]:checked')).map(function (c) { return c.value; }) };
       var pw = f.password.value;
@@ -3717,6 +3718,75 @@
       }).then(function () { btn.disabled = false; });
     });
   };
+  // Admin edits a person: name, login email, phone, and (optionally) a new password.
+  function tempPassword() {
+    var c = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789", out = "", a = new Uint32Array(10);
+    (window.crypto || window.msCrypto).getRandomValues(a);
+    for (var i = 0; i < a.length; i++) out += c[a[i] % c.length];
+    return out;
+  }
+  function openUserEditSheet(email, passwordOnly) {
+    var u = (state.users || []).filter(function (x) { return x.email === email; })[0];
+    if (!u) return;
+    var me = (Cloud.user.email || "").toLowerCase(), self = u.email === me;
+    var h = "<h2>" + (passwordOnly ? "Reset password" : "Edit person") + "</h2>" +
+      (passwordOnly ? '<p class="hint" style="margin-top:0">' + esc(u.name || u.email) + " · " + esc(u.email) + "</p>" :
+        '<label class="field"><span>Name</span><input class="input" id="ue-name" value="' + esc(u.name || "") + '"></label>' +
+        '<label class="field"><span>Email (their login)</span><input class="input" id="ue-email" type="email" value="' + esc(u.email) + '"></label>' +
+        '<label class="field"><span>Phone</span><input class="input" id="ue-phone" type="tel" value="' + esc(u.phone || "") + '" placeholder="optional"></label>') +
+      '<label class="field"><span>' + (passwordOnly ? "New password" : "New password <small style=\"color:var(--muted);font-weight:500\">(leave blank to keep their current one)</small>") + "</span>" +
+      '<div style="display:flex;gap:8px"><input class="input" id="ue-pw" type="text" autocomplete="off" minlength="8" placeholder="At least 8 characters" style="flex:1">' +
+      '<button type="button" class="btn small" id="ue-gen">Make one</button></div></label>' +
+      '<p class="hint" style="margin:0">Give them the new password; they can sign in with it right away.</p>' +
+      '<div class="error-text" id="ue-err" hidden></div>' +
+      '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ue-save">' + (passwordOnly ? "Change password" : "Save") + "</button></div>";
+    openSheet(h, function (sheet) {
+      var q = function (id) { return sheet.querySelector(id); };
+      q("#ue-gen").addEventListener("click", function () { q("#ue-pw").value = tempPassword(); q("#ue-pw").select(); });
+      if (passwordOnly) setTimeout(function () { q("#ue-pw").focus(); }, 60);
+      q("#ue-save").addEventListener("click", function (e) {
+        var err = q("#ue-err"), fail = function (m) { err.textContent = m; err.hidden = false; e.target.disabled = false; };
+        var name = passwordOnly ? u.name || "" : q("#ue-name").value.trim();
+        var newEmail = passwordOnly ? u.email : q("#ue-email").value.trim().toLowerCase();
+        var phone = passwordOnly ? u.phone : q("#ue-phone").value.trim();
+        var pw = q("#ue-pw").value;
+        err.hidden = true;
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmail)) return fail("Enter a valid email.");
+        if (pw && pw.length < 8) return fail("Password must be at least 8 characters.");
+        if (passwordOnly && !pw) return fail("Enter a new password, or tap Make one.");
+        var emailChanged = newEmail !== u.email;
+        if (emailChanged && (state.users || []).some(function (x) { return x.email === newEmail; })) return fail(newEmail + " is already in the list.");
+        e.target.disabled = true;
+        var login = emailChanged || pw
+          ? Cloud.adminUsers({ action: "update", email: u.email, new_email: emailChanged ? newEmail : "", password: pw || "", name: passwordOnly ? null : name, phone: passwordOnly ? null : phone || "" })
+          : Promise.resolve({});
+        login.then(function (r) {
+          // Save name / phone under the current email first, then move the person to the new email.
+          var nu = JSON.parse(JSON.stringify(u)); nu.name = name; nu.phone = phone;
+          return (passwordOnly ? Promise.resolve() : Cloud.saveUser(nu)).then(function () {
+            return emailChanged ? Cloud.renameUserEmail(u.email, newEmail) : null;
+          }).then(function () { return r; });
+        }).then(function (r) {
+          closeSheet();
+          var notes = [];
+          if (emailChanged) notes.push(r && r.noLogin ? "Email updated (they don't have a login yet)" : "Login email changed to " + newEmail);
+          if (pw) notes.push(r && r.noLogin ? "No login exists for them, so no password was set" : "Password changed");
+          toast(notes.length ? notes.join(" · ") : "Saved");
+          if (pw && !(r && r.noLogin)) alert("New password for " + newEmail + ":\n\n" + pw + "\n\nGive it to them; they can change it later by asking an admin.");
+          if (self && emailChanged) {
+            alert("You changed your own email. Sign in again with " + newEmail + ".");
+            Cloud.signOut().then(function () { go("login"); });
+            return;
+          }
+          loadUsers();
+        }, function (ex) {
+          var m = ex && ex.message || "Couldn't save";
+          if (/Unknown action/i.test(m)) m = "The admin-users function needs updating: redeploy supabase/functions/admin-users/index.ts in Supabase, then try again.";
+          fail(m);
+        });
+      });
+    });
+  }
   function loadUsers() {
     Cloud.listUsers().then(function (list) {
       state.users = list;
@@ -3729,13 +3799,13 @@
         var divs = (u.divisions || []).map(String), em = esc(u.email);
         return '<div class="card user-card' + (u.blocked ? " blocked" : "") + '"><div class="u-head"><div><div class="t-title">' + esc(u.name || u.email.split("@")[0]) +
           (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : u.role === "field" ? ' <span class="badge">Field</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
-          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + (u.role === "admin" ? " · all divisions" : " · " + (divs.length ? "Division" + (divs.length === 1 ? " " : "s ") + esc(divs.join(", ")) : "all divisions (none assigned)")) + "</div></div></div>" +
+          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + (u.phone ? " · " + esc(u.phone) : "") + (u.role === "admin" ? " · all divisions" : " · " + (divs.length ? "Division" + (divs.length === 1 ? " " : "s ") + esc(divs.join(", ")) : "all divisions (none assigned)")) + "</div></div></div>" +
           (self ? "" : '<label class="field" style="margin:8px 0 4px"><span>User type</span>' + roleSelectHtml("role", u.role || "user", ' data-user-role="' + em + '"') + "</label>") +
           (u.role === "admin" ? "" : '<div class="field" style="margin:6px 0"><span>Divisions</span>' + divChecksHtml(divs, ' data-user-div="' + em + '"') + "</div>") +
           (u.role === "user" ? '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + em + '"' + (u.can_edit_shop ? " checked" : "") + ">Can add / remove shop stock</label>" +
             '<label class="toggle"><input type="checkbox" data-user-flag="can_review_invoices" data-email="' + em + '"' + (u.can_review_invoices ? " checked" : "") + ">Can review invoices</label>" : "") +
           (self ? "" : '<label class="toggle"><input type="checkbox" data-user-flag="blocked" data-email="' + em + '"' + (u.blocked ? " checked" : "") + ">Turn off access</label>") +
-          '<div class="btn-row"><button class="btn" data-action="user-password" data-email="' + esc(u.email) + '">Reset password</button>' +
+          '<div class="btn-row"><button class="btn" data-action="user-edit" data-email="' + esc(u.email) + '">Edit</button><button class="btn" data-action="user-password" data-email="' + esc(u.email) + '">Reset password</button>' +
           (self ? "" : '<button class="btn danger" data-action="user-remove" data-email="' + esc(u.email) + '">Remove from list</button>') + "</div></div>";
       }).join("") + "</div>" : '<div class="empty">No one added yet.</div>';
       el.insertAdjacentHTML("beforeend", '<p class="hint" style="font-size:13px">People with a login who aren\'t listed here are regular users with no divisions: they can order for any job and look up shop stock, but can\'t change it or review invoices.</p>');
@@ -4156,15 +4226,8 @@
       if (!confirm("Remove " + email + " from the list? Their shop permission goes away (their login still works - use 'Turn off access' to block them).")) return;
       Cloud.deleteUser(email).then(function () { toast("Removed"); loadUsers(); }, function (e) { toast(e.message || "Couldn't remove"); });
     },
-    "user-password": function (el) {
-      var email = el.getAttribute("data-email");
-      var pw = prompt("New password for " + email + " (at least 8 characters):");
-      if (pw == null) return;
-      if (pw.length < 8) { toast("Password must be at least 8 characters"); return; }
-      Cloud.adminUsers({ action: "reset-password", email: email, password: pw }).then(function () { toast("Password changed"); }, function (e) {
-        alert("Password not changed: " + (e.message || "unknown error"));
-      });
-    },
+    "user-edit": function (el) { openUserEditSheet(el.getAttribute("data-email"), false); },
+    "user-password": function (el) { openUserEditSheet(el.getAttribute("data-email"), true); },
     "sync-now": function () { syncNow().then(function () { if (sync.state === "synced") toast("Up to date"); }); },
     "history-mine": function (el) { state.historyMine = el.getAttribute("data-val") === "1"; render(); },
     "sign-out": function () {
