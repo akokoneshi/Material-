@@ -1,5 +1,5 @@
 -- Kim Industries - Material Orders: jobs by division, user divisions, and the "field" user type.
--- Run AFTER schema.sql, shop.sql and invoices.sql: Dashboard > SQL Editor > New query > paste this file > Run. Safe to re-run.
+-- Run AFTER schema.sql, shop.sql, invoices.sql and catalog.sql: Dashboard > SQL Editor > New query > paste this file > Run. Safe to re-run.
 --
 -- User types (app_users.role):
 --   admin - everything, every division.
@@ -157,6 +157,13 @@ create policy "divisions read"  on public.divisions for select to authenticated 
 create policy "divisions write" on public.divisions for all to authenticated using (is_admin()) with check (is_admin());
 create policy "supplier divisions read"  on public.supplier_divisions for select to authenticated using (not is_blocked());
 create policy "supplier divisions write" on public.supplier_divisions for all to authenticated using (is_admin()) with check (is_admin());
+
+-- Items added to a supplier's price list (approved requests, items added from invoices) belong to divisions:
+-- people only get the ones for their divisions. Empty = every division (GIC items, and admin edits of regular items).
+alter table public.catalog_items add column if not exists divisions text[] not null default '{}';
+drop policy if exists "catalog items read" on public.catalog_items;
+create policy "catalog items read" on public.catalog_items for select to authenticated
+  using (not is_blocked() and (is_admin() or cardinality(divisions) = 0 or cardinality(my_divisions()) = 0 or divisions && my_divisions()));
 
 -- ---------------------------------------------------------------- policies
 alter table public.jobs enable row level security;

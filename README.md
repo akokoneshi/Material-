@@ -95,6 +95,9 @@ from the list.
 CT-Homans, CT-SPI, CT-DI and CT-AIT are Divisions 100 & 200; GIC is all divisions. People only see the suppliers for their
 divisions (New Order, Price Lookup and the invoice price-list check), and a supplier can only be ordered on its divisions'
 jobs, with no override. Admins see every division and supplier.
+Items added to a supplier's price list (approved price-list requests, items added from invoices) belong to divisions: by
+default the requester's divisions (or the job's), so a Division 100 addition to CT-DI isn't seen by Division 200. Items added
+to GIC are shared by every division. The admin can change the divisions when approving or editing the item.
 
 **User types** (Users & Permissions):
 - **Admin**: everything, every division.

@@ -42,14 +42,16 @@
         ex.edited = !ex.added;
         ex.editedBy = r.created_by || ""; ex.editedAt = r.updated_at || r.created_at || "";
         ex.name = r.name; ex.unit = String(r.unit || "EA").toUpperCase(); ex.category = r.category || (ex.added ? "Added Items" : ex.category);
-        ex.price = +r.price || 0; ex.model = r.model || "";
+        ex.price = +r.price || 0; ex.model = r.model || ""; ex.divisions = (r.divisions || []).map(String);
         if (indexed) S.buildIndex([ex]);
         if (typeof MATERIALS !== "undefined") { MATERIALS = null; MAT_BY_KEY = {}; }
         return;
       }
       if (ex || !BY_SUPPLIER[r.supplier]) return;
+      // Items added for other divisions aren't shown (the database doesn't send them either).
+      if (!divsVisible(r.divisions)) return;
       var it = { idx: ITEMS.length, name: r.name, unit: String(r.unit || "EA").toUpperCase(), category: r.category || "Added Items",
-        price: +r.price || 0, model: r.model || "", id: r.id, supplier: r.supplier, key: key, added: true };
+        price: +r.price || 0, model: r.model || "", id: r.id, supplier: r.supplier, key: key, added: true, divisions: (r.divisions || []).map(String) };
       ITEMS.push(it);
       BY_KEY[key] = it;
       BY_SUPPLIER[r.supplier].push(it);
@@ -186,6 +188,44 @@
   function suppliersForMe() {
     if (isAdmin() || !myDivisions().length) return SUPPLIERS;
     return SUPPLIERS.filter(function (s) { return myDivisions().some(function (d) { return supplierServes(s, d); }); });
+  }
+  // Added price-list items: which divisions see them. [] = every division.
+  function divsVisible(divs) {
+    if (!divs || !divs.length || !Cloud.enabled || !Cloud.user || isAdmin() || !myDivisions().length) return true;
+    return divs.some(function (d) { return myDivisions().indexOf(String(d)) >= 0; });
+  }
+  // Default divisions for an item added to a supplier's list: GIC (or any all-division supplier) = everyone;
+  // otherwise the given divisions (the requester's, or the job's) that the supplier serves, else all of the supplier's.
+  function defaultItemDivs(sup, base) {
+    var sd = supplierDivs(sup);
+    if (!sd.length) return [];
+    var b = (base || []).map(String).filter(function (d) { return d && sd.indexOf(d) >= 0; });
+    return b.length ? b : sd;
+  }
+  // Division picker for an added item; reads back with itemDivsFrom().
+  function itemDivsHtml(sup, sel, id) {
+    var sd = supplierDivs(sup);
+    return '<div class="field item-divs" id="' + id + '"><span>Divisions that see this item</span>' +
+      '<p class="hint item-divs-all" style="margin:2px 0 0"' + (sd.length ? " hidden" : "") + ">Every division (" + esc(sup || "this supplier") + "'s price list is shared by all divisions).</p>" +
+      '<div class="div-checks item-divs-list"' + (sd.length ? "" : " hidden") + ">" + divList().map(function (d) {
+        return '<label class="div-check"' + (sd.length && sd.indexOf(d) < 0 ? " hidden" : "") + '><input type="checkbox" value="' + d + '"' + (sel.indexOf(d) >= 0 ? " checked" : "") + ">" + esc(divLabel(d)) + "</label>";
+      }).join("") + "</div></div>";
+  }
+  // Show the right boxes when the supplier changes.
+  function itemDivsForSupplier(box, sup, base) {
+    var sd = supplierDivs(sup), sel = defaultItemDivs(sup, base);
+    box.querySelector(".item-divs-all").hidden = !!sd.length;
+    box.querySelector(".item-divs-list").hidden = !sd.length;
+    box.querySelectorAll(".item-divs-list input").forEach(function (cb) {
+      cb.parentNode.hidden = !!sd.length && sd.indexOf(cb.value) < 0;
+      cb.checked = sel.indexOf(cb.value) >= 0;
+    });
+  }
+  function itemDivsFrom(box, sup) {
+    var sd = supplierDivs(sup);
+    if (!sd.length) return [];
+    return Array.prototype.slice.call(box.querySelectorAll(".item-divs-list input:checked")).map(function (c) { return c.value; })
+      .filter(function (d) { return sd.indexOf(d) >= 0; });
   }
   function refreshDivSetup() {
     if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
@@ -3381,6 +3421,7 @@
         '<label class="toggle"><input type="radio" name="ai-to" value="day" checked>Day-to-day price list (every job)</label>' +
         '<label class="toggle"><input type="radio" name="ai-to" value="job">Job special pricing only</label>' +
         '<label class="toggle"><input type="radio" name="ai-to" value="both">Both</label></div>' +
+        itemDivsHtml(sup, defaultItemDivs(sup, invJob(inv) && jobDivision(invJob(inv)) ? [jobDivision(invJob(inv))] : []), "ai-divs") +
         '<div id="ai-jobbox" hidden><div class="filters"><label class="field"><span>Job #</span><input class="input" id="ai-job" value="' + esc(job) + '" placeholder="e.g. 3425"></label>' +
         '<label class="field"><span>Price book</span><select class="input" id="ai-book"></select></label></div></div>';
     } else {
@@ -3412,8 +3453,9 @@
           '<option value="">New book: ' + esc(sup) + " items from invoices</option>";
       }
       function sync() {
-        var t = target(), box = sheet.querySelector("#ai-jobbox");
+        var t = target(), box = sheet.querySelector("#ai-jobbox"), dv = sheet.querySelector("#ai-divs");
         if (box) box.hidden = t === "day";
+        if (dv) dv.hidden = t === "job";
         sheet.querySelectorAll(".ai-cat").forEach(function (el) { el.hidden = t === "job"; });
       }
       sheet.querySelectorAll('input[name="ai-to"]').forEach(function (el) { el.addEventListener("change", sync); });
@@ -3434,6 +3476,9 @@
         if (picks.some(function (v) { return !v.name; })) return fail("Every item needs a name.");
         if (admin && t !== "day" && !j) return fail("Enter the job # for special pricing.");
         if (admin && t !== "day" && picks.some(function (v) { return !(v.price > 0); })) return fail("Special pricing needs a price for every item.");
+        var divs = admin ? itemDivsFrom(sheet.querySelector("#ai-divs"), sup) : [];
+        if (admin && t !== "job" && supplierDivs(sup).length && !divs.length) return fail("Tick at least one division for the day-to-day price list.");
+        picks.forEach(function (v) { v.divisions = divs; });
         if (!navigator.onLine) return fail("Connect to the internet to save.");
         err.hidden = true; e.target.disabled = true;
         var done;
@@ -3566,6 +3611,7 @@
         '<label class="field"><span>Price (blank = TBD)</span><input class="input" data-f="price" type="number" inputmode="decimal" min="0" step="any" value="' + (r.price > 0 ? esc(r.price) : "") + '"></label>' +
         '<label class="field full"><span>Category</span><input class="input" data-f="category" list="cat-list" value="Added Items"></label>' +
         '<label class="field full"><span>Note (optional)</span><input class="input" data-f="note" placeholder="For your records"></label></div>' +
+        itemDivsHtml(r.supplier, defaultItemDivs(r.supplier, requestBaseDivs(r)), "rd-" + r.id) +
         '<div class="btn-row"><button class="btn danger" data-action="req-reject" data-id="' + esc(r.id) + '">Reject</button>' +
         '<button class="btn primary" data-action="req-approve" data-id="' + esc(r.id) + '">Approve &amp; add to price list</button></div></div>';
     });
@@ -3581,10 +3627,25 @@
     }
     return h + "</main>";
   };
+  // Default divisions for a request: the requester's divisions, else the job's division.
+  function requestBaseDivs(r) {
+    var u = (state.users || []).filter(function (x) { return x.email === String(r.requested_by || "").toLowerCase(); })[0];
+    var d = u && u.divisions && u.divisions.length ? u.divisions.map(String) : [];
+    if (!d.length && r.job_number && jobDivision(r.job_number)) d = [jobDivision(r.job_number)];
+    return d;
+  }
+  AFTER["catalog-requests"] = function () {
+    document.querySelectorAll(".req-card").forEach(function (card) {
+      var sel = card.querySelector('[data-f="supplier"]'), id = card.getAttribute("data-req");
+      var req = store.get("catalogRequests", []).filter(function (r) { return r.id === id; })[0];
+      if (sel && req) sel.addEventListener("change", function () { itemDivsForSupplier(card.querySelector(".item-divs"), sel.value, requestBaseDivs(req)); });
+    });
+  };
   function reqFields(id) {
     var card = document.querySelector('[data-req="' + id + '"]'), v = {};
     card.querySelectorAll("[data-f]").forEach(function (el) { v[el.getAttribute("data-f")] = el.value.trim(); });
     v.price = parseFloat(v.price) || 0;
+    v.divisions = itemDivsFrom(card.querySelector(".item-divs"), v.supplier);
     return v;
   }
   // ----- jobs & divisions (admin)
@@ -4118,10 +4179,15 @@
         });
       });
     },
-    "catalog-requests": function () { go("catalog-requests"); refreshCatalog().then(function () { if (state.view === "catalog-requests") render(); }); },
+    "catalog-requests": function () {
+      go("catalog-requests");
+      Promise.all([refreshCatalog(), refreshJobs(), Cloud.listUsers().then(function (l) { state.users = l; }, function () { /* keep */ })])
+        .then(function () { if (state.view === "catalog-requests") render(); });
+    },
     "req-approve": function (el) {
       var id = el.getAttribute("data-id"), req = store.get("catalogRequests", []).filter(function (r) { return r.id === id; })[0], v = reqFields(id);
       if (!v.name) { toast("Item name is required"); return; }
+      if (supplierDivs(v.supplier).length && !v.divisions.length) { toast("Tick at least one division"); return; }
       el.disabled = true;
       Cloud.approveCatalogRequest(req, v).then(refreshCatalog).then(function () { toast("Added to the price list: " + v.name); render(); },
         function (e) { el.disabled = false; toast(e.message || "Couldn't approve"); });
@@ -4142,7 +4208,8 @@
         '<p class="hint">Supplier: ' + esc(it.supplier) + " · Item ID " + esc(it.id) +
         (o ? "<br>Edited" + (it.editedBy ? " by " + esc(it.editedBy.split("@")[0]) : "") + (it.editedAt ? " " + esc(fmtDate(it.editedAt)) : "") +
           ". Original price list: " + (o.price > 0 ? fmtMoney(o.price) : "TBD") + " / " + esc(o.unit) + (o.model ? " · #" + esc(o.model) : "") + (o.name !== it.name ? " · " + esc(o.name) : "") : "") + "</p>" +
-        '<p class="hint">Changes apply to everyone. Job special pricing still wins on that job; sent orders keep the prices they were sent with.</p>' +
+        (it.added ? itemDivsHtml(it.supplier, it.divisions && it.divisions.length ? it.divisions : defaultItemDivs(it.supplier, []), "ce-divs") : "") +
+        '<p class="hint">' + (it.added ? "Changes apply to the divisions ticked above." : "Changes apply to everyone.") + " Job special pricing still wins on that job; sent orders keep the prices they were sent with.</p>" +
         '<div class="btn-row">' + (o ? '<button class="btn danger" id="ce-reset">Undo edits</button>' : "") +
         '<button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ce-save">Save changes</button></div>';
       openSheet(h, function (sheet) {
@@ -4151,6 +4218,10 @@
           var f = { name: sheet.querySelector("#ce-name").value.trim(), model: sheet.querySelector("#ce-model").value.trim(), unit: sheet.querySelector("#ce-unit").value,
             price: parseFloat(sheet.querySelector("#ce-price").value) || 0, category: sheet.querySelector("#ce-cat").value.trim() };
           if (!f.name) { toast("Item name is required"); return; }
+          if (it.added) {
+            f.divisions = itemDivsFrom(sheet.querySelector("#ce-divs"), it.supplier);
+            if (supplierDivs(it.supplier).length && !f.divisions.length) { toast("Tick at least one division"); return; }
+          }
           e.target.disabled = true;
           (it.added ? Cloud.updateCatalogItem(it.id, f) : Cloud.saveCatalogEdit(it, f)).then(function () { return after("Product updated"); }, function (ex) { e.target.disabled = false; toast(ex.message); });
         });

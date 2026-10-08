@@ -398,10 +398,10 @@
 
   Cloud.approveCatalogRequest = function (req, item) {
     var id = "KIM-" + Math.random().toString(36).slice(2, 8).toUpperCase();
-    return client.from("catalog_items").insert({
+    return client.from("catalog_items").insert(withDivs({
       id: id, supplier: item.supplier, name: item.name, model: item.model || null, unit: item.unit || "EA",
       category: item.category || "Added Items", price: item.price > 0 ? item.price : 0
-    }).then(must).then(function () {
+    }, item.divisions)).then(must).then(null, divsErr).then(function () {
       return client.from("catalog_requests").update({
         status: "approved", item_id: id, review_note: item.note || null, reviewed_by: user.email, reviewed_at: new Date().toISOString()
       }).eq("id", req.id).then(must);
@@ -411,18 +411,25 @@
   // Admin adds items straight to the day-to-day price list (e.g. from an invoice). Returns the new ids in order.
   Cloud.addCatalogItems = function (items) {
     var rows = items.map(function (it) {
-      return { id: "KIM-" + Math.random().toString(36).slice(2, 8).toUpperCase(), supplier: it.supplier, name: it.name, model: it.model || null,
-        unit: it.unit || "EA", category: it.category || "Added Items", price: it.price > 0 ? it.price : 0 };
+      return withDivs({ id: "KIM-" + Math.random().toString(36).slice(2, 8).toUpperCase(), supplier: it.supplier, name: it.name, model: it.model || null,
+        unit: it.unit || "EA", category: it.category || "Added Items", price: it.price > 0 ? it.price : 0 }, it.divisions);
     });
-    return client.from("catalog_items").insert(rows).then(must).then(function () { return rows.map(function (r) { return r.id; }); });
+    return client.from("catalog_items").insert(rows).then(must).then(null, divsErr).then(function () { return rows.map(function (r) { return r.id; }); });
   };
 
   Cloud.updateCatalogItem = function (id, f) {
-    return client.from("catalog_items").update({
+    return client.from("catalog_items").update(withDivs({
       name: f.name, model: f.model || null, unit: f.unit || "EA", category: f.category || "Added Items",
       price: f.price > 0 ? f.price : 0, updated_at: new Date().toISOString()
-    }).eq("id", id).then(must);
+    }, f.divisions)).eq("id", id).then(must).then(null, divsErr);
   };
+
+  // Added price-list items belong to divisions ([] = every division). Only sent when given, so older setups still work.
+  function withDivs(row, divisions) { if (divisions) row.divisions = divisions; return row; }
+  function divsErr(e) {
+    if (/divisions|column|PGRST204|42703/i.test((e && (e.code + " " + e.message)) || "")) throw new Error("Run supabase/divisions.sql in Supabase first (it adds divisions to price-list items).");
+    throw e;
+  }
 
   // Admin edit of a regular price-list item: saved under the item's own id and applied over the price list on every device.
   Cloud.saveCatalogEdit = function (it, f) {

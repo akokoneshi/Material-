@@ -451,3 +451,6 @@ details summary { cursor: pointer; padding: 6px 0; }
 .div-names .field { margin: 0 0 8px; }
 .sup-divs { border-top: 1px solid var(--border); padding: 10px 0; }
 .sup-divs .div-checks { margin-top: 6px; }
+
+/* Anything marked hidden stays hidden, even when a class sets display. */
+[hidden] { display: none !important; }
