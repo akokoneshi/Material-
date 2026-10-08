@@ -74,6 +74,46 @@ language sql stable security definer set search_path = public as $$
       or job_division(coalesce(nullif(btrim(p_job), ''), (select job_number from orders where id = p_order))) = any(my_divisions())
 $$;
 
+-- ---------------------------------------------------------------- division names + price lists by division
+create table if not exists public.divisions (
+  code  text primary key,
+  name  text not null,
+  sort  integer not null default 0
+);
+-- Re-running keeps names an admin has changed in the app.
+insert into public.divisions (code, name, sort) values
+  ('100', 'Connecticut', 1), ('200', 'Hudson Valley', 2), ('300', 'Albany', 3),
+  ('400', 'Buffalo/Rochester', 4), ('600', 'Firestop', 6), ('700', 'Syracuse', 7)
+on conflict (code) do nothing;
+
+-- Which divisions may order from each supplier's day-to-day price list. Empty = every division.
+create table if not exists public.supplier_divisions (
+  supplier    text primary key,
+  divisions   text[] not null default '{}',
+  updated_at  timestamptz not null default now()
+);
+insert into public.supplier_divisions (supplier, divisions) values
+  ('CT-Homans', '{100,200}'), ('CT-SPI', '{100,200}'), ('CT-DI', '{100,200}'), ('CT-AIT', '{100,200}'), ('GIC', '{}')
+on conflict (supplier) do nothing;
+
+-- Can this supplier's price list be used on this job? Jobs not on the jobs list, and suppliers with no limits, are allowed.
+create or replace function public.supplier_serves_job(p_supplier text, p_job text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select job_division(p_job) is null or cardinality(x.sd) = 0 or job_division(p_job) = any(x.sd)
+  from (select coalesce((select divisions from supplier_divisions where supplier = p_supplier), '{}'::text[]) as sd) x
+$$;
+
+alter table public.divisions enable row level security;
+alter table public.supplier_divisions enable row level security;
+drop policy if exists "divisions read"  on public.divisions;
+drop policy if exists "divisions write" on public.divisions;
+drop policy if exists "supplier divisions read"  on public.supplier_divisions;
+drop policy if exists "supplier divisions write" on public.supplier_divisions;
+create policy "divisions read"  on public.divisions for select to authenticated using (not is_blocked());
+create policy "divisions write" on public.divisions for all to authenticated using (is_admin()) with check (is_admin());
+create policy "supplier divisions read"  on public.supplier_divisions for select to authenticated using (not is_blocked());
+create policy "supplier divisions write" on public.supplier_divisions for all to authenticated using (is_admin()) with check (is_admin());
+
 -- ---------------------------------------------------------------- policies
 alter table public.jobs enable row level security;
 drop policy if exists "jobs read"   on public.jobs;
@@ -93,7 +133,7 @@ drop policy if exists "orders delete" on public.orders;
 create policy "orders read" on public.orders for select to authenticated
   using (not is_blocked() and (can_see_job(job_number) or created_by_email = current_email() or created_by = auth.uid()));
 create policy "orders insert" on public.orders for insert to authenticated
-  with check (not is_blocked() and can_see_job(job_number));
+  with check (not is_blocked() and can_see_job(job_number) and (is_admin() or supplier_serves_job(supplier, job_number)));
 create policy "orders update" on public.orders for update to authenticated
   using (not is_blocked() and (can_see_job(job_number) or created_by_email = current_email() or created_by = auth.uid()))
   with check (not is_blocked() and (can_see_job(job_number) or created_by_email = current_email() or created_by = auth.uid()));
@@ -112,3 +152,4 @@ create policy "invoices update" on public.invoices for update to authenticated
 -- Check: jobs per division, and each person's type and divisions.
 select division, count(*) as jobs from public.jobs group by division order by division;
 select email, role, divisions from public.app_users order by role, email;
+select s.supplier, case when cardinality(s.divisions) = 0 then 'all divisions' else array_to_string(s.divisions, ', ') end as divisions from public.supplier_divisions s order by 1;

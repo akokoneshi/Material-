@@ -210,6 +210,20 @@
     return chain;
   };
 
+  // Division names and which divisions can use each supplier's price list (empty list = every division).
+  Cloud.listDivisionSetup = function () {
+    return Promise.all([
+      client.from("divisions").select("code, name, sort").order("sort").order("code").then(must),
+      client.from("supplier_divisions").select("supplier, divisions").then(must)
+    ]).then(function (r) { return { divisions: r[0], suppliers: r[1] }; });
+  };
+  Cloud.saveDivisionName = function (code, name) {
+    return client.from("divisions").upsert({ code: String(code).trim(), name: name }, { onConflict: "code" }).then(must);
+  };
+  Cloud.saveSupplierDivisions = function (supplier, divisions) {
+    return client.from("supplier_divisions").upsert({ supplier: supplier, divisions: divisions, updated_at: new Date().toISOString() }, { onConflict: "supplier" }).then(must);
+  };
+
   Cloud.deleteJob = function (jobNumber) {
     return client.from("jobs").delete().eq("job_number", jobNumber).then(must);
   };

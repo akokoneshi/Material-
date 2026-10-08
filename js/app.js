@@ -149,11 +149,43 @@
   function setJobs(list) { store.set("jobs", list); jobIdx = null; }
   function refreshJobs() {
     if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    refreshDivSetup();
     return Cloud.listJobs().then(function (l) { setJobs(l); store.set("jobsSetupMissing", false); }, function (e) {
       if (/PGRST205|42P01|does not exist|schema cache/i.test((e && (e.code + " " + e.message)) || "")) store.set("jobsSetupMissing", true);
     });
   }
   function myDivisions() { return (access().divisions || []).map(String); }
+
+  // ----- division names + which divisions can use each supplier's price list (admin-editable; these are the defaults)
+  var DIV_DEFAULT = [["100", "Connecticut"], ["200", "Hudson Valley"], ["300", "Albany"], ["400", "Buffalo/Rochester"], ["600", "Firestop"], ["700", "Syracuse"]];
+  function divSetup() { return store.get("divSetup", null); }
+  function divList() {
+    var d = divSetup();
+    return d && d.divisions && d.divisions.length ? d.divisions.map(function (x) { return String(x.code); }) : DIV_DEFAULT.map(function (x) { return x[0]; });
+  }
+  function divName(code) {
+    var d = divSetup(), r = d && d.divisions ? d.divisions.filter(function (x) { return String(x.code) === String(code); })[0] : null;
+    if (r) return r.name || "";
+    var f = DIV_DEFAULT.filter(function (x) { return x[0] === String(code); })[0];
+    return f ? f[1] : "";
+  }
+  function divLabel(code) { var n = divName(code); return String(code) + (n ? " · " + n : ""); }
+  function supplierDivs(sup) {
+    var d = divSetup(), r = d && d.suppliers ? d.suppliers.filter(function (x) { return x.supplier === sup; })[0] : null;
+    if (r) return (r.divisions || []).map(String);
+    return /^CT-/.test(sup) ? ["100", "200"] : [];
+  }
+  function supplierServes(sup, div) { var l = supplierDivs(sup); return !div || !l.length || l.indexOf(String(div)) >= 0; }
+  function supplierDivText(sup) { var l = supplierDivs(sup); return l.length ? "Division" + (l.length === 1 ? " " : "s ") + l.map(divLabel).join(", ") : "All divisions"; }
+  // Suppliers this person can order from: admins and people without divisions get all of them.
+  function suppliersForMe() {
+    if (isAdmin() || !myDivisions().length) return SUPPLIERS;
+    return SUPPLIERS.filter(function (s) { return myDivisions().some(function (d) { return supplierServes(s, d); }); });
+  }
+  function refreshDivSetup() {
+    if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
+    return Cloud.listDivisionSetup().then(function (r) { store.set("divSetup", r); }, function () { /* tables not added yet: defaults */ });
+  }
   function jobsLimited() { return Cloud.enabled && !!Cloud.user && !isAdmin() && myDivisions().length > 0 && getJobs().length > 0; }
   function jobDivision(j) { var r = jobsByKey()[jobKey(j)]; return r ? String(r.division) : ""; }
   function canSeeJob(j) { return !jobsLimited() || myDivisions().indexOf(jobDivision(j)) >= 0; }
@@ -693,7 +725,7 @@
       (canReviewInvoices() ? '<button class="btn" data-action="invoices">' + ICON.list + "Invoice Approval</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
-    if (jobsLimited()) h += '<p class="hint" style="margin:0 0 10px">' + (isField() ? "Field view · " : "") + "Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().join(", ")) + "</p>";
+    if (jobsLimited()) h += '<p class="hint" style="margin:0 0 10px">' + (isField() ? "Field view · " : "") + "Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().map(divLabel).join(", ")) + "</p>";
     else if (isField()) h += '<p class="hint" style="margin:0 0 10px">Field view</p>';
     h += setupBanner();
     var pulls = canEditShop() ? pendingPulls() : [];
@@ -728,11 +760,11 @@
     var h = topbar("New Material Order", "Step 1 of 2", backBtn("home"));
     h += '<main class="page"><div class="step">Step 1 of 2</div><h2>Which supplier are you ordering from?</h2>' +
       '<p class="hint">Only this supplier\'s items and pricing will be shown.</p><div class="tile-list">';
-    SUPPLIERS.forEach(function (s) {
+    suppliersForMe().forEach(function (s) {
       var sel = state.draft && state.draft.supplier === s;
       h += '<button class="tile' + (sel ? " selected" : "") + '" data-action="pick-supplier" data-supplier="' + esc(s) + '">' +
         '<div class="t-main"><div class="t-title">' + esc(s) + '</div><div class="t-sub">' +
-        BY_SUPPLIER[s].length.toLocaleString() + " items</div></div><span class=\"chev\">›</span></button>";
+        BY_SUPPLIER[s].length.toLocaleString() + " items · " + esc(supplierDivText(s)) + "</div></div><span class=\"chev\">›</span></button>";
     });
     h += "</div></main>";
     return h;
@@ -750,7 +782,7 @@
       '<input class="input huge" id="job-number" name="jobNumber" autocomplete="off" autocapitalize="characters" enterkeyhint="next" required value="' + esc(d.jobNumber || "") + '" placeholder="e.g. 24-118">' +
       '<div class="error-text" id="job-error" hidden>Job number is required.</div></label>' +
       (getJobs().length ? '<div id="job-suggest" class="job-suggest"></div>' : "") +
-      (jobsLimited() ? '<p class="hint" style="margin:-4px 0 10px">You can order for Division' + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().join(", ")) + " jobs.</p>" : "");
+      (jobsLimited() ? '<p class="hint" style="margin:-4px 0 10px">You can order for Division' + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().map(divLabel).join(", ")) + " jobs.</p>" : "");
     if (recent.length) {
       h += '<div class="hint" style="margin:-6px 0 0">Recent jobs</div><div class="chips">';
       recent.forEach(function (j) {
@@ -771,14 +803,14 @@
     // Jobs from the jobs list (your divisions only), matching what's typed.
     function suggest() {
       if (!box) return;
-      var q = jobKey(input.value), mine = myJobs();
+      var q = jobKey(input.value), mine = myJobs().filter(function (j) { return supplierServes(state.draft.supplier, j.division); });
       var hits = mine.filter(function (j) { return !q || j.job_number.indexOf(q) >= 0 || String(j.job_name || "").toUpperCase().indexOf(q) >= 0; })
         .sort(function (a, b) { return (b.job_number.indexOf(q) === 0) - (a.job_number.indexOf(q) === 0) || a.job_number.localeCompare(b.job_number, undefined, { numeric: true }); });
       if (q && hits.length === 1 && hits[0].job_number === q) { box.innerHTML = ""; return; }
       box.innerHTML = hits.length ? '<div class="hint" style="margin:0 0 6px">' + (q ? "Matching jobs" : jobsLimited() ? "Your jobs" : "Jobs") + "</div>" +
         hits.slice(0, 8).map(function (j) {
           return '<button type="button" class="tile job-pick" data-action="pick-job" data-job="' + esc(j.job_number) + '" data-name="' + esc(j.job_name || "") + '"><div class="t-main"><div class="t-title">' +
-            esc(j.job_number) + (j.job_name ? " · " + esc(j.job_name) : "") + '</div><div class="t-sub">Division ' + esc(j.division) + "</div></div></button>";
+            esc(j.job_number) + (j.job_name ? " · " + esc(j.job_name) : "") + '</div><div class="t-sub">Division ' + esc(divLabel(j.division)) + "</div></div></button>";
         }).join("") + (hits.length > 8 ? '<div class="hint">' + (hits.length - 8) + " more - keep typing</div>" : "")
         : (q && jobsLimited() ? '<div class="hint">No job ' + esc(q) + " in your division" + (myDivisions().length === 1 ? "" : "s") + ".</div>" : "");
     }
@@ -794,6 +826,12 @@
           : "Job " + jobKey(num) + " isn't in the jobs list for your division" + (myDivisions().length === 1 ? "" : "s") + ". Ask an admin to add it.");
       }
       if (known) num = known.job_number;
+      var sup = state.draft.supplier;
+      if (known && !supplierServes(sup, known.division)) {
+        var why = sup + "'s price list is for " + supplierDivText(sup) + ". Job " + known.job_number + " is Division " + divLabel(known.division) + ".";
+        if (!isAdmin()) return bad(why + " Go back and pick another supplier.");
+        if (!confirm(why + "\n\nStart the order with " + sup + " anyway?")) return;
+      }
       if (!known && isAdmin() && !store.get("jobsSetupMissing", false)) { openAddJobSheet(jobKey(num), nameIn.value.trim()); return; }
       createOrder(state.draft.supplier, num, nameIn.value.trim() || (known && known.job_name) || "");
     });
@@ -811,7 +849,7 @@
     openSheet("<h2>Job " + esc(job) + " isn't on the jobs list</h2>" +
       '<p class="hint" style="margin-top:0">Add it so people in its division can see and order on it.</p>' +
       '<label class="field"><span>Job name <span class="req">*</span></span><input class="input" id="aj-name" value="' + esc(name) + '" placeholder="e.g. Mercy Hospital Boiler Rm"></label>' +
-      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" id="aj-div"><option value="">Pick…</option>' + DIVISIONS.map(function (d) { return "<option>" + d + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" id="aj-div"><option value="">Pick…</option>' + divList().map(function (d) { return '<option value="' + d + '"' + (supplierServes(state.draft && state.draft.supplier, d) ? "" : " disabled") + ">" + esc(divLabel(d)) + "</option>"; }).join("") + "</select></label>" +
       '<div class="error-text" id="aj-err" hidden></div>' +
       '<div class="btn-row" style="margin-top:12px"><button class="btn" id="aj-skip">Order without adding</button><button class="btn primary" id="aj-save">Add job &amp; start order</button></div>', function (sheet) {
       sheet.querySelector("#aj-skip").addEventListener("click", function () { closeSheet(); createOrder(state.draft.supplier, job, name); });
@@ -859,7 +897,11 @@
   // ----- build (search / browse) and lookup share this
   function scopeItems() {
     if (state.view === "shop-add") { var m = materials(); if (!m._indexed) { S.buildIndex(m); m._indexed = true; } return m; }
-    if (state.view === "lookup") return state.lookupSupplier ? BY_SUPPLIER[state.lookupSupplier] : ITEMS;
+    if (state.view === "lookup") {
+      if (state.lookupSupplier) return BY_SUPPLIER[state.lookupSupplier];
+      var ok = suppliersForMe();
+      return ok.length === SUPPLIERS.length ? ITEMS : ITEMS.filter(function (it) { return ok.indexOf(it.supplier) >= 0; });
+    }
     if (state.view === "book-add") { var bk = currentBook(); return bk ? BY_SUPPLIER[bk.supplier] || [] : []; }
     var o = currentOrder();
     if (!o) return [];
@@ -891,7 +933,7 @@
     if (adding) return h;
     h += '<label class="field" style="margin-bottom:6px"><span>Supplier</span><select class="input" id="lookup-supplier">' +
       '<option value="">All suppliers</option>' +
-      SUPPLIERS.map(function (s) { return '<option' + (s === state.lookupSupplier ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") +
+      (state.view === "lookup" ? suppliersForMe() : SUPPLIERS).map(function (s) { return '<option' + (s === state.lookupSupplier ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") +
       "</select></label>" + (state.view === "lookup" && isAdmin() ? editedProductsHtml() : "") + finderHtml() + "</main>";
     return h;
   };
@@ -1857,7 +1899,7 @@
     h += '<div class="searchbar"><div class="search-wrap">' + ICON.search +
       '<input class="search-input" id="stock-q" type="search" autocomplete="off" placeholder=\'Search shop stock, e.g. 1/2 x 1 fiberglass\' value="' + esc(state.stockQuery || "") + '" aria-label="Search shop stock"></div>' +
       '<div class="chips" style="margin:10px 0 0"><button class="chip' + (state.stockDiv ? "" : " on") + '" data-action="stock-div" data-div="">All divisions</button>' +
-      DIVISIONS.map(function (d) { return '<button class="chip' + (state.stockDiv === d ? " on" : "") + '" data-action="stock-div" data-div="' + d + '">' + d + "</button>"; }).join("") +
+      DIVISIONS.map(function (d) { return '<button class="chip' + (state.stockDiv === d ? " on" : "") + '" data-action="stock-div" data-div="' + d + '">' + esc(divLabel(d)) + "</button>"; }).join("") +
       '</div></div><div id="stock-list"></div></main>';
     return h;
   };
@@ -1909,7 +1951,7 @@
     }).join("") : '<div class="hint" style="margin:0">None in the shop yet.</div>') + "</div>";
     if (edit) {
       h += '<div class="field"><span style="display:block;font-weight:600;margin-bottom:6px">Division <span class="req">*</span></span><div class="chips div-chips">' +
-        DIVISIONS.map(function (d) { return '<button type="button" class="chip' + (d === div ? " on" : "") + '" data-div="' + d + '">' + d + "</button>"; }).join("") + "</div></div>" +
+        DIVISIONS.map(function (d) { return '<button type="button" class="chip' + (d === div ? " on" : "") + '" data-div="' + d + '">' + esc(divLabel(d)) + "</button>"; }).join("") + "</div></div>" +
         '<div class="big-stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>' +
         '<input id="stock-qty" type="number" inputmode="decimal" min="0" step="any" placeholder="0" aria-label="Quantity">' +
         '<button type="button" data-step="1" aria-label="Increase">+</button></div><div class="unit-label">' + esc(item.unit || "") + "</div>" +
@@ -2712,7 +2754,7 @@
     h += '<main class="page">';
     if (!canReviewInvoices()) return h + '<div class="empty">Only admins and people with invoice permission can see invoices.</div></main>';
     if (store.get("invoicesSetupMissing", false)) h += '<div class="notice"><b>Database setup not finished.</b> Run <code>supabase/invoices.sql</code> once in Supabase, then reopen this screen.</div>';
-    if (!isAdmin()) h += '<p class="hint" style="margin-top:0">' + (myDivisions().length ? "Showing invoices for Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().join(", ")) + " jobs, plus ones you uploaded."
+    if (!isAdmin()) h += '<p class="hint" style="margin-top:0">' + (myDivisions().length ? "Showing invoices for Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().map(divLabel).join(", ")) + " jobs, plus ones you uploaded."
       : "You don't have a division yet, so you only see invoices you upload. Ask an admin to assign your divisions.") + "</p>";
     h += '<button class="btn primary big block" data-action="inv-upload">' + ICON.plus + "Upload invoices</button>" +
       '<input type="file" id="inv-file" accept="application/pdf,image/*" multiple hidden>' +
@@ -2836,7 +2878,7 @@
     if (!j) return "";
     var r = jobsByKey()[j], o = orderForInvoice(i);
     var name = (r && r.job_name) || (o && o.jobName) || "";
-    return "Job " + j + (name ? " · " + name : "") + (r ? " · Div " + r.division : " · not on the jobs list");
+    return "Job " + j + (name ? " · " + name : "") + (r ? " · Div " + divLabel(r.division) : " · not on the jobs list");
   }
   function invJobHtml(i) {
     var t = invJobText(i);
@@ -3578,12 +3620,27 @@
     if (!isAdmin()) return h + '<div class="empty">Only an admin can manage jobs.</div></main>';
     if (store.get("jobsSetupMissing", false)) h += '<div class="notice"><b>Database setup not finished.</b> Run <code>supabase/divisions.sql</code> once in Supabase (SQL Editor → New query → paste → Run), then reopen this screen.</div>';
     var jobs = getJobs(), f = state.jobsDiv || "", q = jobKey(state.jobsQ || "");
-    var divs = DIVISIONS.slice();
+    var divs = divList();
     jobs.forEach(function (j) { if (divs.indexOf(String(j.division)) < 0) divs.push(String(j.division)); });
     h += '<p class="hint" style="margin-top:0">Every job # belongs to a division. People are given divisions under <b>Users &amp; Permissions</b> and only see and order on those divisions\' jobs. Admins see everything.</p>';
+    // Division names + price lists by division
+    h += '<details class="card div-setup"' + (state.divSetupOpen ? " open" : "") + '><summary><b>Divisions &amp; price lists</b> <span class="hint" style="margin:0">' +
+      esc(divList().map(divLabel).join(" · ")) + "</span></summary>" +
+      '<h4 style="margin:12px 0 6px">Division names</h4><div class="div-names">' + divList().map(function (d) {
+        return '<label class="field"><span>' + esc(d) + '</span><input class="input div-name" data-code="' + esc(d) + '" value="' + esc(divName(d)) + '"></label>';
+      }).join("") + "</div>" +
+      '<h4 style="margin:14px 0 6px">Which divisions use each supplier\'s price list</h4>' +
+      '<p class="hint" style="margin-top:0">People only see the suppliers for their divisions, and a supplier can only be ordered on its divisions\' jobs.</p>' +
+      SUPPLIERS.map(function (sup) {
+        var l = supplierDivs(sup), all = !l.length;
+        return '<div class="sup-divs"><div><b>' + esc(sup) + '</b> <label class="toggle" style="display:inline-flex;margin:0 0 0 8px"><input type="checkbox" class="sup-all" data-sup="' + esc(sup) + '"' + (all ? " checked" : "") + ">All divisions</label></div>" +
+          (all ? "" : '<div class="div-checks">' + divList().map(function (d) {
+            return '<label class="div-check"><input type="checkbox" class="sup-div" data-sup="' + esc(sup) + '" value="' + esc(d) + '"' + (l.indexOf(d) >= 0 ? " checked" : "") + ">" + esc(divLabel(d)) + "</label>";
+          }).join("") + "</div>") + "</div>";
+      }).join("") + "</details>";
     h += '<div class="card"><h2 style="margin-top:0;font-size:18px">Add a job</h2><form id="job-add" autocomplete="off"><div class="filters">' +
       '<label class="field"><span>Job # <span class="req">*</span></span><input class="input" name="job" required autocapitalize="characters" placeholder="e.g. 3425"></label>' +
-      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" name="div"><option value="">Pick…</option>' + divs.map(function (d) { return "<option>" + esc(d) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field"><span>Division <span class="req">*</span></span><select class="input" name="div"><option value="">Pick…</option>' + divs.map(function (d) { return '<option value="' + esc(d) + '">' + esc(divLabel(d)) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field full"><span>Job name <span class="req">*</span></span><input class="input" name="name" required placeholder="e.g. Mercy Hospital Boiler Rm"></label></div>' +
       '<div class="error-text" id="job-add-err" hidden></div>' +
       '<button class="btn primary block" type="submit">Save job</button></form>' +
@@ -3593,7 +3650,7 @@
     jobs.forEach(function (j) { counts[j.division] = (counts[j.division] || 0) + 1; });
     h += "<h3>Jobs (" + jobs.length + ")</h3>";
     h += '<div class="chips"><button class="chip' + (!f ? " on" : "") + '" data-action="jobs-div" data-d="">All</button>' +
-      divs.map(function (d) { return '<button class="chip' + (f === d ? " on" : "") + '" data-action="jobs-div" data-d="' + esc(d) + '">Div ' + esc(d) + " (" + (counts[d] || 0) + ")</button>"; }).join("") + "</div>";
+      divs.map(function (d) { return '<button class="chip' + (f === d ? " on" : "") + '" data-action="jobs-div" data-d="' + esc(d) + '">' + esc(divLabel(d)) + " (" + (counts[d] || 0) + ")</button>"; }).join("") + "</div>";
     h += '<input class="input" id="jobs-q" type="search" placeholder="Find a job # or name" value="' + esc(state.jobsQ || "") + '" style="margin-bottom:10px">';
     var list = jobs.filter(function (j) { return (!f || String(j.division) === f) && (!q || j.job_number.indexOf(q) >= 0 || String(j.job_name || "").toUpperCase().indexOf(q) >= 0); })
       .sort(function (a, b) { return a.job_number.localeCompare(b.job_number, undefined, { numeric: true }); });
@@ -3608,6 +3665,33 @@
   };
   AFTER.jobs = function () {
     if (!isAdmin()) return;
+    var ds = document.querySelector(".div-setup");
+    if (ds) ds.addEventListener("toggle", function () { state.divSetupOpen = ds.open; });
+    var after = function (msg) { return refreshDivSetup().then(function () { toast(msg); var y = window.scrollY; render(); window.scrollTo(0, y); }); };
+    var fail = function (ex) { toast(/divisions|relation|PGRST205|42P01/i.test(ex.message || "") ? "Run supabase/divisions.sql in Supabase first" : ex.message); render(); };
+    document.querySelectorAll(".div-name").forEach(function (inp) {
+      inp.addEventListener("change", function () {
+        var code = inp.getAttribute("data-code"), name = inp.value.trim();
+        if (!name) { inp.value = divName(code); return; }
+        Cloud.saveDivisionName(code, name).then(function () { return after("Division " + code + " is now " + name); }, fail);
+      });
+    });
+    document.querySelectorAll(".sup-all").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var sup = cb.getAttribute("data-sup");
+        // Turning "All divisions" off starts from the divisions it served before (or none).
+        var next = cb.checked ? [] : (supplierDivs(sup).length ? supplierDivs(sup) : [divList()[0]]);
+        Cloud.saveSupplierDivisions(sup, next).then(function () { return after(sup + ": " + (next.length ? "Division" + (next.length === 1 ? " " : "s ") + next.join(", ") : "all divisions")); }, fail);
+      });
+    });
+    document.querySelectorAll(".sup-div").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var sup = cb.getAttribute("data-sup");
+        var next = Array.prototype.slice.call(document.querySelectorAll('.sup-div[data-sup="' + sup + '"]:checked')).map(function (x) { return x.value; });
+        if (!next.length) { toast("Pick at least one division, or tick All divisions"); cb.checked = true; return; }
+        Cloud.saveSupplierDivisions(sup, next).then(function () { return after(sup + ": Division" + (next.length === 1 ? " " : "s ") + next.join(", ")); }, fail);
+      });
+    });
     var form = document.getElementById("job-add");
     form.addEventListener("submit", function (e) {
       e.preventDefault();
@@ -3646,13 +3730,13 @@
   function openJobsImportSheet(res, source) {
     var by = jobsByKey(), add = 0, move = 0, same = 0;
     res.jobs.forEach(function (j) { var ex = by[j.job_number]; if (!ex) add++; else if (String(ex.division) !== j.division || (j.job_name && j.job_name !== ex.job_name)) move++; else same++; });
-    var odd = res.jobs.filter(function (j) { return DIVISIONS.indexOf(j.division) < 0; });
+    var odd = res.jobs.filter(function (j) { return divList().indexOf(j.division) < 0; });
     var h = "<h2>Import jobs</h2><p class=\"hint\" style=\"margin-top:0\">From " + esc(source) + "</p>" +
       (res.jobs.length ? "<p><b>" + res.jobs.length + "</b> jobs found: " + add + " new, " + move + " changed" + (same ? ", " + same + " already the same" : "") + ".</p>" +
         '<div class="hint" style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">' +
         res.jobs.slice(0, 200).map(function (j) { return esc(j.job_number) + (j.job_name ? " · " + esc(j.job_name) : "") + " → Div " + esc(j.division); }).join("<br>") + (res.jobs.length > 200 ? "<br>…" : "") + "</div>"
         : '<div class="notice">No jobs found. Use columns <b>Job #</b>, <b>Job name</b> and <b>Division</b> (a header row helps), or one job per line: <code>3425, Mercy Hospital, 100</code>.</div>') +
-      (odd.length ? '<div class="notice" style="margin-top:8px">' + odd.length + " job" + (odd.length === 1 ? " has a division" : "s have divisions") + " that aren't 100/200/300/400/450/600/700 (e.g. " + esc(odd[0].job_number + " → " + odd[0].division) + "). They'll be saved as written.</div>" : "") +
+      (odd.length ? '<div class="notice" style="margin-top:8px">' + odd.length + " job" + (odd.length === 1 ? " has a division" : "s have divisions") + " that aren't " + divList().join("/") + " (e.g. " + esc(odd[0].job_number + " → " + odd[0].division) + "). They'll be saved as written.</div>" : "") +
       (res.bad.length ? '<div class="notice" style="margin-top:8px"><b>Skipped:</b><br>' + res.bad.slice(0, 10).map(esc).join("<br>") + (res.bad.length > 10 ? "<br>…" : "") + "</div>" : "") +
       '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="close-sheet">Cancel</button>' +
       (res.jobs.length ? '<button class="btn primary" id="ji-save">Save ' + res.jobs.length + " jobs</button>" : "") + "</div>";
@@ -3672,8 +3756,9 @@
     return '<select class="input" name="' + name + '"' + (attrs || "") + ">" + ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (r[0] === role ? " selected" : "") + ">" + r[1] + "</option>"; }).join("") + "</select>";
   }
   function divChecksHtml(sel, attrs) {
-    return '<div class="div-checks">' + DIVISIONS.map(function (d) {
-      return '<label class="div-check"><input type="checkbox" value="' + d + '"' + (sel.indexOf(d) >= 0 ? " checked" : "") + (attrs || "") + ">" + d + "</label>";
+    var list = divList().slice(); sel.forEach(function (d) { if (list.indexOf(d) < 0) list.push(d); });
+    return '<div class="div-checks">' + list.map(function (d) {
+      return '<label class="div-check"><input type="checkbox" value="' + d + '"' + (sel.indexOf(d) >= 0 ? " checked" : "") + (attrs || "") + ">" + esc(divLabel(d)) + "</label>";
     }).join("") + "</div>";
   }
   VIEWS.users = function () {
@@ -3808,7 +3893,7 @@
         var divs = (u.divisions || []).map(String), em = esc(u.email);
         return '<div class="card user-card' + (u.blocked ? " blocked" : "") + '"><div class="u-head"><div><div class="t-title">' + esc(u.name || u.email.split("@")[0]) +
           (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : u.role === "field" ? ' <span class="badge">Field</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
-          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + (u.phone ? " · " + esc(u.phone) : "") + (u.role === "admin" ? " · all divisions" : " · " + (divs.length ? "Division" + (divs.length === 1 ? " " : "s ") + esc(divs.join(", ")) : "all divisions (none assigned)")) + "</div></div></div>" +
+          '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + (u.phone ? " · " + esc(u.phone) : "") + (u.role === "admin" ? " · all divisions" : " · " + (divs.length ? "Division" + (divs.length === 1 ? " " : "s ") + esc(divs.map(divLabel).join(", ")) : "no divisions assigned")) + "</div></div></div>" +
           (self ? "" : '<label class="field" style="margin:8px 0 4px"><span>User type</span>' + roleSelectHtml("role", u.role || "user", ' data-user-role="' + em + '"') + "</label>") +
           (u.role === "admin" ? "" : '<div class="field" style="margin:6px 0"><span>Divisions</span>' + divChecksHtml(divs, ' data-user-div="' + em + '"') + "</div>") +
           (u.role === "user" ? '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + em + '"' + (u.can_edit_shop ? " checked" : "") + ">Can add / remove shop stock</label>" +
@@ -4014,10 +4099,10 @@
     "job-edit": function (el) {
       var j = jobsByKey()[el.getAttribute("data-job")];
       if (!j) return;
-      var dl = DIVISIONS.slice(); if (dl.indexOf(String(j.division)) < 0) dl.push(String(j.division));
+      var dl = divList(); if (dl.indexOf(String(j.division)) < 0) dl.push(String(j.division));
       openSheet("<h2>Job " + esc(j.job_number) + "</h2>" +
         '<label class="field"><span>Job name</span><input class="input" id="je-name" value="' + esc(j.job_name || "") + '"></label>' +
-        '<label class="field"><span>Division</span><select class="input" id="je-div">' + dl.map(function (d) { return "<option" + (String(j.division) === d ? " selected" : "") + ">" + esc(d) + "</option>"; }).join("") + "</select></label>" +
+        '<label class="field"><span>Division</span><select class="input" id="je-div">' + dl.map(function (d) { return '<option value="' + esc(d) + '"' + (String(j.division) === d ? " selected" : "") + ">" + esc(divLabel(d)) + "</option>"; }).join("") + "</select></label>" +
         '<label class="toggle"><input type="checkbox" id="je-active"' + (j.active !== false ? " checked" : "") + '>Active (shows up when people start an order)</label>' +
         '<div class="btn-row" style="margin-top:12px"><button class="btn danger" id="je-del">Delete job</button><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="je-save">Save</button></div>', function (sheet) {
         sheet.querySelector("#je-save").addEventListener("click", function () {
@@ -4155,7 +4240,7 @@
         '<div class="hint" id="sj-info"></div>' +
         '<div class="btn-row" style="margin-top:12px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="sj-save">Save</button></div>', function (sheet) {
         var inp = sheet.querySelector("#sj-job"), info = sheet.querySelector("#sj-info");
-        var show = function () { var r = jobsByKey()[jobKey(inp.value)]; info.textContent = r ? (r.job_name || "") + " · Division " + r.division : inp.value.trim() ? "Not on the jobs list" : ""; };
+        var show = function () { var r = jobsByKey()[jobKey(inp.value)]; info.textContent = r ? (r.job_name || "") + " · Division " + divLabel(r.division) : inp.value.trim() ? "Not on the jobs list" : ""; };
         inp.addEventListener("input", show); show();
         sheet.querySelector("#sj-save").addEventListener("click", function (e) {
           var j = jobKey(inp.value);

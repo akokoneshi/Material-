@@ -446,3 +446,8 @@ details summary { cursor: pointer; padding: 6px 0; }
 .job-row .job-div { width: 84px; flex: none; padding: 6px 8px; min-height: 36px; }
 .job-suggest { margin: -4px 0 12px; }
 .job-suggest .job-pick { width: 100%; margin-bottom: 6px; padding: 10px 12px; text-align: left; }
+.div-setup summary { cursor: pointer; list-style: revert; }
+.div-names { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 10px; }
+.div-names .field { margin: 0 0 8px; }
+.sup-divs { border-top: 1px solid var(--border); padding: 10px 0; }
+.sup-divs .div-checks { margin-top: 6px; }

@@ -90,6 +90,11 @@ Add jobs one at a time, **Paste a list** (`job #, job name, division` per line, 
 **Import Excel / CSV** (columns *Job #*, *Job name*, *Division*; "Div 450" is read as 450). A job's division can be changed
 from the list.
 
+**Divisions & price lists** (top of Jobs & Divisions): division names (100 Connecticut, 200 Hudson Valley, 300 Albany,
+400 Buffalo/Rochester, 600 Firestop, 700 Syracuse; editable) and which divisions use each supplier's day-to-day price list.
+CT-Homans, CT-SPI, CT-DI and CT-AIT are Divisions 100 & 200; GIC is all divisions. People only see the suppliers for their
+divisions (New Order and Price Lookup), and a supplier can only be ordered on its divisions' jobs (admins are asked to confirm).
+
 **User types** (Users & Permissions):
 - **Admin**: everything, every division.
 - **Regular user**: creates orders; reviews invoices and/or edits shop stock when those boxes are ticked.
