@@ -77,7 +77,7 @@ create table if not exists public.shop_stock (
   unit        text,
   category    text,
   model       text,
-  division    text not null check (division in ('100','200','300','400','450','600','700')),
+  division    text not null check (division in ('100','200','300','400','600','700')),
   qty         numeric(12,3) not null default 0 check (qty >= 0),
   updated_by  text,
   updated_at  timestamptz not null default now(),
@@ -115,7 +115,7 @@ begin
   if not can_edit_shop() then
     raise exception 'You do not have permission to change shop stock';
   end if;
-  if p_division not in ('100','200','300','400','450','600','700') then
+  if p_division not in ('100','200','300','400','600','700') then
     raise exception 'Unknown division %', p_division;
   end if;
   select qty into cur from shop_stock where item_key = p_item_key and division = p_division for update;

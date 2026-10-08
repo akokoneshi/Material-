@@ -130,7 +130,12 @@
     return out;
   }
   // ---------------------------------------------------------------- shop stock & permissions
-  var DIVISIONS = ["100", "200", "300", "400", "450", "600", "700"];
+  // Shop divisions = the division list (plus any division that still has stock, so nothing is hidden).
+  function shopDivisions() {
+    var l = divList().slice();
+    getStock().forEach(function (r) { if (r.division && l.indexOf(String(r.division)) < 0) l.push(String(r.division)); });
+    return l;
+  }
   function getStock() { return store.get("stock", []); }
   function access() { return store.get("access", { role: "user", can_edit_shop: false, blocked: false }); }
   function isAdmin() { return Cloud.enabled && !!Cloud.user && access().role === "admin"; }
@@ -828,9 +833,7 @@
       if (known) num = known.job_number;
       var sup = state.draft.supplier;
       if (known && !supplierServes(sup, known.division)) {
-        var why = sup + "'s price list is for " + supplierDivText(sup) + ". Job " + known.job_number + " is Division " + divLabel(known.division) + ".";
-        if (!isAdmin()) return bad(why + " Go back and pick another supplier.");
-        if (!confirm(why + "\n\nStart the order with " + sup + " anyway?")) return;
+        return bad(sup + "'s price list is for " + supplierDivText(sup) + ". Job " + known.job_number + " is Division " + divLabel(known.division) + ". Go back and pick another supplier.");
       }
       if (!known && isAdmin() && !store.get("jobsSetupMissing", false)) { openAddJobSheet(jobKey(num), nameIn.value.trim()); return; }
       createOrder(state.draft.supplier, num, nameIn.value.trim() || (known && known.job_name) || "");
@@ -1899,7 +1902,7 @@
     h += '<div class="searchbar"><div class="search-wrap">' + ICON.search +
       '<input class="search-input" id="stock-q" type="search" autocomplete="off" placeholder=\'Search shop stock, e.g. 1/2 x 1 fiberglass\' value="' + esc(state.stockQuery || "") + '" aria-label="Search shop stock"></div>' +
       '<div class="chips" style="margin:10px 0 0"><button class="chip' + (state.stockDiv ? "" : " on") + '" data-action="stock-div" data-div="">All divisions</button>' +
-      DIVISIONS.map(function (d) { return '<button class="chip' + (state.stockDiv === d ? " on" : "") + '" data-action="stock-div" data-div="' + d + '">' + esc(divLabel(d)) + "</button>"; }).join("") +
+      shopDivisions().map(function (d) { return '<button class="chip' + (state.stockDiv === d ? " on" : "") + '" data-action="stock-div" data-div="' + d + '">' + esc(divLabel(d)) + "</button>"; }).join("") +
       '</div></div><div id="stock-list"></div></main>';
     return h;
   };
@@ -1951,7 +1954,7 @@
     }).join("") : '<div class="hint" style="margin:0">None in the shop yet.</div>') + "</div>";
     if (edit) {
       h += '<div class="field"><span style="display:block;font-weight:600;margin-bottom:6px">Division <span class="req">*</span></span><div class="chips div-chips">' +
-        DIVISIONS.map(function (d) { return '<button type="button" class="chip' + (d === div ? " on" : "") + '" data-div="' + d + '">' + esc(divLabel(d)) + "</button>"; }).join("") + "</div></div>" +
+        divList().map(function (d) { return '<button type="button" class="chip' + (d === div ? " on" : "") + '" data-div="' + d + '">' + esc(divLabel(d)) + "</button>"; }).join("") + "</div></div>" +
         '<div class="big-stepper"><button type="button" data-step="-1" aria-label="Decrease">−</button>' +
         '<input id="stock-qty" type="number" inputmode="decimal" min="0" step="any" placeholder="0" aria-label="Quantity">' +
         '<button type="button" data-step="1" aria-label="Increase">+</button></div><div class="unit-label">' + esc(item.unit || "") + "</div>" +
@@ -3320,7 +3323,7 @@
     var h = '<h3>Price-list check</h3><div class="card"><p class="hint" style="margin-top:0">Compares each billed price with our price list' +
       (job ? " and Job " + esc(job) + "'s special pricing" : "") + ". No order needed.</p>" +
       '<div class="filters"><label class="field"><span>Supplier</span><select class="input" id="pl-sup"><option value="">Pick…</option>' +
-      SUPPLIERS.map(function (x) { return "<option" + (x === sup ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
+      suppliersForMe().map(function (x) { return "<option" + (x === sup ? " selected" : "") + ">" + esc(x) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field"><span>Job # (for job pricing)</span><input class="input" id="pl-job" value="' + esc(job) + '" placeholder="optional"></label></div>';
     if (!sup) return h + '<p class="hint">Pick the supplier to check prices.</p></div>';
     var rows = priceListCheck(inv, sup, job);

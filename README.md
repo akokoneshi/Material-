@@ -50,8 +50,8 @@ Sent orders can't be deleted. Only drafts can.
 
 ## Shop stock, users & permissions
 
-**Shop Stock** (home screen) lists material on hand in our shops by **Division**: 100, 200, 300, 400,
-450, 600 and 700. Stock is tracked by *material*, not by supplier. For example, "1/2" x 1" Fiberglass
+**Shop Stock** (home screen) lists material on hand in our shops by **Division**: 100 Connecticut, 200 Hudson Valley,
+300 Albany, 400 Buffalo/Rochester, 600 Firestop and 700 Syracuse (the same division list as Jobs & Divisions). Stock is tracked by *material*, not by supplier. For example, "1/2" x 1" Fiberglass
 Pipe Covering · JM · ASJ" is one material, whether it was bought from CT-DI, CT-SPI or CT-Homans.
 The supplier only matters when an order is being created.
 
@@ -85,15 +85,16 @@ This needs the latest `admin-users` function deployed and the phone column (`sup
 
 ## Jobs, divisions & user types
 
-**Jobs & Divisions** (admin, home screen or Settings) lists every job # and its division (100, 200, 300, 400, 450, 600, 700).
+**Jobs & Divisions** (admin, home screen or Settings) lists every job # and its division (100, 200, 300, 400, 600, 700).
 Add jobs one at a time, **Paste a list** (`job #, job name, division` per line, or rows copied from Excel), or
-**Import Excel / CSV** (columns *Job #*, *Job name*, *Division*; "Div 450" is read as 450). A job's division can be changed
+**Import Excel / CSV** (columns *Job #*, *Job name*, *Division*; "Div 300" is read as 300). A job's division can be changed
 from the list.
 
 **Divisions & price lists** (top of Jobs & Divisions): division names (100 Connecticut, 200 Hudson Valley, 300 Albany,
 400 Buffalo/Rochester, 600 Firestop, 700 Syracuse; editable) and which divisions use each supplier's day-to-day price list.
 CT-Homans, CT-SPI, CT-DI and CT-AIT are Divisions 100 & 200; GIC is all divisions. People only see the suppliers for their
-divisions (New Order and Price Lookup), and a supplier can only be ordered on its divisions' jobs (admins are asked to confirm).
+divisions (New Order, Price Lookup and the invoice price-list check), and a supplier can only be ordered on its divisions'
+jobs, with no override. Admins see every division and supplier.
 
 **User types** (Users & Permissions):
 - **Admin**: everything, every division.

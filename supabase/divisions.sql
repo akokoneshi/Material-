@@ -96,6 +96,50 @@ insert into public.supplier_divisions (supplier, divisions) values
   ('CT-Homans', '{100,200}'), ('CT-SPI', '{100,200}'), ('CT-DI', '{100,200}'), ('CT-AIT', '{100,200}'), ('GIC', '{}')
 on conflict (supplier) do nothing;
 
+-- Shop stock uses the same division list (no more 450). Stock changes are checked against the divisions table
+-- instead of a fixed list, so new divisions work in the shop too.
+alter table public.shop_stock drop constraint if exists shop_stock_division_check;
+update public.app_users set divisions = array_remove(divisions, '450') where '450' = any(divisions);
+create or replace function public.adjust_stock(
+  p_item_key text, p_item_name text, p_unit text, p_category text, p_model text,
+  p_division text, p_delta numeric, p_set numeric default null,
+  p_reason text default null, p_job text default null, p_order text default null
+) returns numeric
+language plpgsql security definer set search_path = public as $$
+declare
+  cur numeric := 0;
+  nxt numeric;
+begin
+  if not can_edit_shop() then
+    raise exception 'You do not have permission to change shop stock';
+  end if;
+  if not exists (select 1 from divisions where code = p_division) then
+    raise exception 'Unknown division %', p_division;
+  end if;
+  select qty into cur from shop_stock where item_key = p_item_key and division = p_division for update;
+  cur := coalesce(cur, 0);
+  nxt := case when p_set is not null then p_set else cur + coalesce(p_delta, 0) end;
+  if nxt < 0 then
+    raise exception 'Only % on hand in Div %', trim_scale(cur), p_division;
+  end if;
+  if nxt = 0 then
+    delete from shop_stock where item_key = p_item_key and division = p_division;
+  else
+    insert into shop_stock (item_key, item_name, unit, category, model, division, qty, updated_by, updated_at)
+    values (p_item_key, p_item_name, p_unit, p_category, p_model, p_division, nxt, current_email(), now())
+    on conflict (item_key, division) do update
+      set qty = excluded.qty, item_name = excluded.item_name, unit = excluded.unit, category = excluded.category,
+          model = excluded.model, updated_by = excluded.updated_by, updated_at = now();
+  end if;
+  if nxt <> cur then
+    insert into shop_log (item_key, item_name, unit, division, delta, qty_after, reason, job_number, order_id, by_email)
+    values (p_item_key, p_item_name, p_unit, p_division, nxt - cur, nxt, p_reason, p_job, p_order, current_email());
+  end if;
+  return nxt;
+end $$;
+revoke all on function public.adjust_stock(text,text,text,text,text,text,numeric,numeric,text,text,text) from public, anon;
+grant execute on function public.adjust_stock(text,text,text,text,text,text,numeric,numeric,text,text,text) to authenticated;
+
 -- Can this supplier's price list be used on this job? Jobs not on the jobs list, and suppliers with no limits, are allowed.
 create or replace function public.supplier_serves_job(p_supplier text, p_job text) returns boolean
 language sql stable security definer set search_path = public as $$
@@ -133,7 +177,7 @@ drop policy if exists "orders delete" on public.orders;
 create policy "orders read" on public.orders for select to authenticated
   using (not is_blocked() and (can_see_job(job_number) or created_by_email = current_email() or created_by = auth.uid()));
 create policy "orders insert" on public.orders for insert to authenticated
-  with check (not is_blocked() and can_see_job(job_number) and (is_admin() or supplier_serves_job(supplier, job_number)));
+  with check (not is_blocked() and can_see_job(job_number) and supplier_serves_job(supplier, job_number));
 create policy "orders update" on public.orders for update to authenticated
   using (not is_blocked() and (can_see_job(job_number) or created_by_email = current_email() or created_by = auth.uid()))
   with check (not is_blocked() and (can_see_job(job_number) or created_by_email = current_email() or created_by = auth.uid()));
@@ -151,5 +195,6 @@ create policy "invoices update" on public.invoices for update to authenticated
 
 -- Check: jobs per division, and each person's type and divisions.
 select division, count(*) as jobs from public.jobs group by division order by division;
+select division, count(*) as stock_rows from public.shop_stock group by division order by division;
 select email, role, divisions from public.app_users order by role, email;
 select s.supplier, case when cardinality(s.divisions) = 0 then 'all divisions' else array_to_string(s.divisions, ', ') end as divisions from public.supplier_divisions s order by 1;
