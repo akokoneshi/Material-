@@ -189,6 +189,17 @@
     if (isAdmin() || !myDivisions().length) return SUPPLIERS;
     return SUPPLIERS.filter(function (s) { return myDivisions().some(function (d) { return supplierServes(s, d); }); });
   }
+  // Division admins: like a regular user in their divisions, and approve / add / edit price-list items for those divisions.
+  function isDivAdmin() { return Cloud.enabled && !!Cloud.user && access().role === "div_admin" && !access().blocked && myDivisions().length > 0; }
+  function canApproveItems() { return isAdmin() || isDivAdmin(); }
+  // Company admins edit any product; division admins only items added for their own divisions (or shared GIC items).
+  function canEditItem(it) {
+    if (!it || it.jobOnly) return false;
+    if (isAdmin()) return true;
+    if (!isDivAdmin() || !it.added) return false;
+    var d = it.divisions || [];
+    return d.length ? d.every(function (x) { return myDivisions().indexOf(x) >= 0; }) : !supplierDivs(it.supplier).length;
+  }
   // Added price-list items: which divisions see them. [] = every division.
   function divsVisible(divs) {
     if (!divs || !divs.length || !Cloud.enabled || !Cloud.user || isAdmin() || !myDivisions().length) return true;
@@ -197,14 +208,20 @@
   // Default divisions for an item added to a supplier's list: GIC (or any all-division supplier) = everyone;
   // otherwise the given divisions (the requester's, or the job's) that the supplier serves, else all of the supplier's.
   function defaultItemDivs(sup, base) {
-    var sd = supplierDivs(sup);
-    if (!sd.length) return [];
+    var sd = itemDivChoices(sup);
+    if (!supplierDivs(sup).length) return [];
     var b = (base || []).map(String).filter(function (d) { return d && sd.indexOf(d) >= 0; });
     return b.length ? b : sd;
   }
   // Division picker for an added item; reads back with itemDivsFrom().
-  function itemDivsHtml(sup, sel, id) {
+  // Divisions an item for this supplier can be given: the supplier's divisions (division admins: only their own).
+  function itemDivChoices(sup) {
     var sd = supplierDivs(sup);
+    if (!sd.length) return [];
+    return isAdmin() || !isDivAdmin() ? sd : sd.filter(function (d) { return myDivisions().indexOf(d) >= 0; });
+  }
+  function itemDivsHtml(sup, sel, id) {
+    var sd = itemDivChoices(sup);
     return '<div class="field item-divs" id="' + id + '"><span>Divisions that see this item</span>' +
       '<p class="hint item-divs-all" style="margin:2px 0 0"' + (sd.length ? " hidden" : "") + ">Every division (" + esc(sup || "this supplier") + "'s price list is shared by all divisions).</p>" +
       '<div class="div-checks item-divs-list"' + (sd.length ? "" : " hidden") + ">" + divList().map(function (d) {
@@ -213,7 +230,7 @@
   }
   // Show the right boxes when the supplier changes.
   function itemDivsForSupplier(box, sup, base) {
-    var sd = supplierDivs(sup), sel = defaultItemDivs(sup, base);
+    var sd = itemDivChoices(sup), sel = defaultItemDivs(sup, base);
     box.querySelector(".item-divs-all").hidden = !!sd.length;
     box.querySelector(".item-divs-list").hidden = !sd.length;
     box.querySelectorAll(".item-divs-list input").forEach(function (cb) {
@@ -222,7 +239,7 @@
     });
   }
   function itemDivsFrom(box, sup) {
-    var sd = supplierDivs(sup);
+    var sd = itemDivChoices(sup);
     if (!sd.length) return [];
     return Array.prototype.slice.call(box.querySelectorAll(".item-divs-list input:checked")).map(function (c) { return c.value; })
       .filter(function (d) { return sd.indexOf(d) >= 0; });
@@ -466,7 +483,7 @@
     if (!Cloud.enabled || !Cloud.user || !navigator.onLine) return Promise.resolve();
     return Promise.all([
       Cloud.listCatalogItems().then(function (rows) { store.set("catalogExtra", rows); addCatalogExtras(rows); }, function () { /* keep cached */ }),
-      isAdmin() ? Cloud.listCatalogRequests().then(function (rows) { store.set("catalogRequests", rows); }, function () { /* keep cached */ }) : null
+      canApproveItems() ? Cloud.listCatalogRequests().then(function (rows) { store.set("catalogRequests", rows); }, function () { /* keep cached */ }) : null
     ]);
   }
   function pendingCatalogRequests() { return store.get("catalogRequests", []).filter(function (r) { return r.status === "pending"; }); }
@@ -766,15 +783,16 @@
       (isAdmin() ? '<button class="btn" data-action="users">' + ICON.gear + "Users</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="jobs">' + ICON.list + "Jobs &amp; Divisions</button>" : "") +
       (isAdmin() ? '<button class="btn" data-action="pricing">' + ICON.tag + "Special Pricing</button>" : "") +
-      (isAdmin() ? '<button class="btn" data-action="catalog-requests">' + ICON.tag + "Price-list Requests" + (pendingCatalogRequests().length ? " (" + pendingCatalogRequests().length + ")" : "") + "</button>" + '<button class="btn" data-action="edit-products">' + ICON.tag + "Edit Products</button>" : "") +
+      (canApproveItems() ? '<button class="btn" data-action="catalog-requests">' + ICON.tag + "Price-list Requests" + (pendingCatalogRequests().length ? " (" + pendingCatalogRequests().length + ")" : "") + "</button>" : "") +
+      (isAdmin() ? '<button class="btn" data-action="edit-products">' + ICON.tag + "Edit Products</button>" : "") +
       (canReviewInvoices() ? '<button class="btn" data-action="invoices">' + ICON.list + "Invoice Approval</button>" : "") +
       "</div></div>";
     if (access().blocked) h += '<div class="notice">Your access has been turned off. Contact the office.</div>';
-    if (jobsLimited()) h += '<p class="hint" style="margin:0 0 10px">' + (isField() ? "Field view · " : "") + "Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().map(divLabel).join(", ")) + "</p>";
+    if (jobsLimited()) h += '<p class="hint" style="margin:0 0 10px">' + (isField() ? "Field view · " : isDivAdmin() ? "Division admin · " : "") + "Division" + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().map(divLabel).join(", ")) + "</p>";
     else if (isField()) h += '<p class="hint" style="margin:0 0 10px">Field view</p>';
     h += setupBanner();
     var pulls = canEditShop() ? pendingPulls() : [];
-    var catPending = isAdmin() ? pendingCatalogRequests().length : 0;
+    var catPending = canApproveItems() ? pendingCatalogRequests().length : 0;
     if (catPending) h += '<button class="tile pull-alert" data-action="catalog-requests"><div class="t-main"><div class="t-title">' + ICON.tag + catPending + " price-list request" + (catPending === 1 ? "" : "s") + ' to review</div><div class="t-sub">Items the crew asked to add to the price list</div></div><span class="chev">›</span></button>';
     var invAttn = canReviewInvoices() ? getInvoices().filter(function (i) { return i.status === "mismatch" || i.status === "no_order" || i.status === "error"; }).length : 0;
     if (invAttn) h += '<button class="tile pull-alert" data-action="invoices"><div class="t-main"><div class="t-title">' + invAttn + " invoice" + (invAttn === 1 ? "" : "s") + ' need review</div><div class="t-sub">Pricing doesn\'t match the order, or no order was found</div></div><span class="chev">›</span></button>';
@@ -3389,7 +3407,7 @@
         (r.status === "under" ? '<div class="hint pos" style="margin:4px 0 0">' + esc(lowerNote(r.diff, l.quantity, r.it.unit, r.special ? "the job price" : "the price list")) + "</div>" : "") +
         (r.it ? '<div class="hint" style="margin:4px 0 0">' + plSourceText(r, sup, job) + "</div>" : "") +
         (r.note ? '<div class="hint" style="margin:4px 0 0">' + esc(r.note) + "</div>" : "") +
-        (r.it && isAdmin() && !r.it.jobOnly ? '<button class="btn small" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(r.it.key) + '">Edit product</button>' : "") +
+        (r.it && canEditItem(r.it) ? '<button class="btn small" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(r.it.key) + '">Edit product</button>' : "") +
         (r.status === "unknown" ? '<button class="btn small" style="margin-top:8px" data-action="inv-add-items" data-line="' + esc(l.line) + '">' + (isAdmin() ? "Add to our pricing" : "Ask to add") + "</button>" : "") + "</div>";
     }).join("") + "</div></div>";
     return h;
@@ -3412,11 +3430,14 @@
     var sup = saved.supplier || inv.supplier || "", job = saved.job != null ? saved.job : guessInvoiceJob(inv);
     var rows = priceListCheck(inv, sup, job).filter(function (r) { return r.status === "unknown" && (lineNo == null || String(r.line.line) === String(lineNo)); });
     if (!rows.length) return;
-    var admin = isAdmin(), units = CAT.units.slice().sort();
-    var h = "<h2>" + (admin ? "Add to our pricing" : "Ask an admin to add") + "</h2>" +
+    var admin = isAdmin(), direct = admin || isDivAdmin(), units = CAT.units.slice().sort();
+    var h = "<h2>" + (direct ? "Add to our pricing" : "Ask an admin to add") + "</h2>" +
       '<datalist id="ai-cats"><option value="Added Items">' + CAT.categories.slice().sort().map(function (c) { return '<option value="' + esc(c) + '">'; }).join("") + "</datalist>" +
       '<p class="hint" style="margin-top:0">Supplier: <b>' + esc(sup) + "</b>. Check the name, part #, unit and price before saving.</p>";
-    if (admin) {
+    if (direct && !admin) {
+      h += '<input type="radio" name="ai-to" value="day" checked hidden><p class="hint">Adds to the day-to-day price list for your division' + (myDivisions().length === 1 ? "" : "s") + ".</p>" +
+        itemDivsHtml(sup, defaultItemDivs(sup, invJob(inv) && jobDivision(invJob(inv)) ? [jobDivision(invJob(inv))] : []), "ai-divs");
+    } else if (admin) {
       h += '<div class="field"><span>Add to</span>' +
         '<label class="toggle"><input type="radio" name="ai-to" value="day" checked>Day-to-day price list (every job)</label>' +
         '<label class="toggle"><input type="radio" name="ai-to" value="job">Job special pricing only</label>' +
@@ -3435,10 +3456,10 @@
         '<div class="filters"><label class="field"><span>Part #</span><input class="input" data-f="model" value="' + esc(l.item_code || "") + '"></label>' +
         '<label class="field"><span>Unit</span><select class="input" data-f="unit">' + units.map(function (u) { return "<option" + (u === plUnitFor(l.unit) ? " selected" : "") + ">" + esc(u) + "</option>"; }).join("") + "</select></label>" +
         '<label class="field"><span>Price</span><input class="input" data-f="price" type="number" inputmode="decimal" min="0" step="any" value="' + (l.unit_price != null ? esc(l.unit_price) : "") + '"></label>' +
-        (admin ? '<label class="field ai-cat"><span>Category</span><input class="input" data-f="category" list="ai-cats" value="Added Items"></label>' : "") + "</div></div>";
+        (direct ? '<label class="field ai-cat"><span>Category</span><input class="input" data-f="category" list="ai-cats" value="Added Items"></label>' : "") + "</div></div>";
     }).join("") +
       '<div class="error-text" id="ai-err" hidden></div>' +
-      '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ai-save">' + (admin ? "Save" : "Send to admin") + "</button></div>";
+      '<div class="btn-row" style="margin-top:10px"><button class="btn" data-action="close-sheet">Cancel</button><button class="btn primary" id="ai-save">' + (direct ? "Save" : "Send to admin") + "</button></div>";
     openSheet(h, function (sheet) {
       function target() { var el = sheet.querySelector('input[name="ai-to"]:checked'); return el ? el.value : "day"; }
       function books(j) {
@@ -3476,13 +3497,13 @@
         if (picks.some(function (v) { return !v.name; })) return fail("Every item needs a name.");
         if (admin && t !== "day" && !j) return fail("Enter the job # for special pricing.");
         if (admin && t !== "day" && picks.some(function (v) { return !(v.price > 0); })) return fail("Special pricing needs a price for every item.");
-        var divs = admin ? itemDivsFrom(sheet.querySelector("#ai-divs"), sup) : [];
-        if (admin && t !== "job" && supplierDivs(sup).length && !divs.length) return fail("Tick at least one division for the day-to-day price list.");
+        var divs = direct ? itemDivsFrom(sheet.querySelector("#ai-divs"), sup) : [];
+        if (direct && t !== "job" && supplierDivs(sup).length && !divs.length) return fail("Tick at least one division for the day-to-day price list.");
         picks.forEach(function (v) { v.divisions = divs; });
         if (!navigator.onLine) return fail("Connect to the internet to save.");
         err.hidden = true; e.target.disabled = true;
         var done;
-        if (!admin) {
+        if (!direct) {
           done = Promise.all(picks.map(function (v) {
             return Cloud.submitCatalogRequest({ supplier: sup, name: v.name, model: v.model, unit: v.unit, price: v.price, job_number: j || null, order_id: inv.order_id || null });
           })).then(function () { return picks.length + " request" + (picks.length === 1 ? "" : "s") + " sent to the admin"; });
@@ -3595,7 +3616,8 @@
   VIEWS["catalog-requests"] = function () {
     var h = topbar("Price-list requests", "Review before items are added", backBtn("home", "Home"), syncPill());
     h += '<main class="page">';
-    if (!isAdmin()) return h + '<div class="empty">Only an admin can review price-list requests.</div></main>';
+    if (!canApproveItems()) return h + '<div class="empty">Only an admin can review price-list requests.</div></main>';
+    if (!isAdmin()) h += '<p class="hint" style="margin-top:0">Requests for Division' + (myDivisions().length === 1 ? " " : "s ") + esc(myDivisions().map(divLabel).join(", ")) + ". Items you approve are added for your division" + (myDivisions().length === 1 ? "" : "s") + " (GIC items for everyone).</p>";
     var all = store.get("catalogRequests", []), pend = all.filter(function (r) { return r.status === "pending"; });
     var units = CAT.units.slice().sort(), cats = CAT.categories.slice().sort();
     h += '<datalist id="cat-list"><option value="Added Items">' + cats.map(function (c) { return '<option value="' + esc(c) + '">'; }).join("") + "</datalist>";
@@ -3622,7 +3644,7 @@
         return '<div class="card"><div class="t-title">' + esc(it ? it.name : r.name) + " " + (r.status === "approved" ? '<span class="badge sent">Added</span>' : '<span class="badge">Rejected</span>') + "</div>" +
           '<div class="t-sub">' + esc(r.supplier) + (it ? " · " + (it.price > 0 ? fmtMoney(it.price) : "Price TBD") + " / " + esc(it.unit) + (it.model ? " · #" + esc(it.model) : "") : "") +
           " · by " + esc((r.requested_by || "").split("@")[0]) + " · " + esc(fmtDate(r.reviewed_at)) + (r.review_note ? " · " + esc(r.review_note) : "") + "</div>" +
-          (it ? '<button class="btn" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(it.key) + '">Edit item</button>' : "") + "</div>";
+          (it && canEditItem(it) ? '<button class="btn" style="margin-top:8px" data-action="catalog-edit" data-key="' + esc(it.key) + '">Edit item</button>' : "") + "</div>";
       }).join("");
     }
     return h + "</main>";
@@ -3815,7 +3837,9 @@
   }
 
   // ----- users & permissions (admin)
-  var ROLES = [["user", "Regular user", "Creates orders; can review invoices / edit shop stock if ticked"], ["field", "Field view", "Creates orders and looks at shop stock only"], ["admin", "Admin", "Everything, every division"]];
+  var ROLES = [["user", "Regular user", "Creates orders; can review invoices / edit shop stock if ticked"], ["field", "Field view", "Creates orders and looks at shop stock only"],
+    ["div_admin", "Division admin", "Regular user for their divisions, plus approves and adds price-list items for them"], ["admin", "Company admin", "Everything, every division"]];
+  function roleHasPerms(r) { return r === "user" || r === "div_admin"; }
   function roleSelectHtml(name, role, attrs) {
     return '<select class="input" name="' + name + '"' + (attrs || "") + ">" + ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (r[0] === role ? " selected" : "") + ">" + r[1] + "</option>"; }).join("") + "</select>";
   }
@@ -3847,14 +3871,14 @@
     if (!isAdmin()) return;
     loadUsers();
     var nr = document.getElementById("nu-role");
-    var syncNew = function () { document.getElementById("nu-perms").hidden = nr.value !== "user"; document.getElementById("nu-divs").hidden = nr.value === "admin"; };
+    var syncNew = function () { document.getElementById("nu-perms").hidden = !roleHasPerms(nr.value); document.getElementById("nu-divs").hidden = nr.value === "admin"; };
     nr.addEventListener("change", syncNew); syncNew();
     document.getElementById("user-form").addEventListener("submit", function (e) {
       e.preventDefault();
       var f = e.target, err = document.getElementById("user-error"), btn = f.querySelector("button[type=submit]");
       var role = f.role.value;
       var u = { email: f.email.value.trim().toLowerCase(), name: f.name.value.trim(), role: role, phone: f.phone.value.trim() || undefined,
-        can_edit_shop: role === "user" && f.can_edit_shop.checked, can_review_invoices: role === "user" && f.can_review_invoices.checked,
+        can_edit_shop: roleHasPerms(role) && f.can_edit_shop.checked, can_review_invoices: roleHasPerms(role) && f.can_review_invoices.checked,
         divisions: role === "admin" ? [] : Array.prototype.slice.call(f.querySelectorAll('input[name="div"]:checked')).map(function (c) { return c.value; }) };
       var pw = f.password.value;
       err.hidden = true;
@@ -3956,11 +3980,12 @@
         var self = u.email === me;
         var divs = (u.divisions || []).map(String), em = esc(u.email);
         return '<div class="card user-card' + (u.blocked ? " blocked" : "") + '"><div class="u-head"><div><div class="t-title">' + esc(u.name || u.email.split("@")[0]) +
-          (u.role === "admin" ? ' <span class="badge sent">Admin</span>' : u.role === "field" ? ' <span class="badge">Field</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
+          (u.role === "admin" ? ' <span class="badge sent">Company admin</span>' : u.role === "div_admin" ? ' <span class="badge sent">Division admin</span>' : u.role === "field" ? ' <span class="badge">Field</span>' : "") + (u.blocked ? ' <span class="badge">Access off</span>' : "") + "</div>" +
           '<div class="t-sub">' + esc(u.email) + (self ? " (you)" : "") + (u.phone ? " · " + esc(u.phone) : "") + (u.role === "admin" ? " · all divisions" : " · " + (divs.length ? "Division" + (divs.length === 1 ? " " : "s ") + esc(divs.map(divLabel).join(", ")) : "no divisions assigned")) + "</div></div></div>" +
           (self ? "" : '<label class="field" style="margin:8px 0 4px"><span>User type</span>' + roleSelectHtml("role", u.role || "user", ' data-user-role="' + em + '"') + "</label>") +
           (u.role === "admin" ? "" : '<div class="field" style="margin:6px 0"><span>Divisions</span>' + divChecksHtml(divs, ' data-user-div="' + em + '"') + "</div>") +
-          (u.role === "user" ? '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + em + '"' + (u.can_edit_shop ? " checked" : "") + ">Can add / remove shop stock</label>" +
+          (u.role === "div_admin" && !divs.length ? '<div class="notice" style="margin:6px 0">Tick their division(s): a division admin with none can\'t approve anything.</div>' : "") +
+          (roleHasPerms(u.role) ? '<label class="toggle"><input type="checkbox" data-user-flag="can_edit_shop" data-email="' + em + '"' + (u.can_edit_shop ? " checked" : "") + ">Can add / remove shop stock</label>" +
             '<label class="toggle"><input type="checkbox" data-user-flag="can_review_invoices" data-email="' + em + '"' + (u.can_review_invoices ? " checked" : "") + ">Can review invoices</label>" : "") +
           (self ? "" : '<label class="toggle"><input type="checkbox" data-user-flag="blocked" data-email="' + em + '"' + (u.blocked ? " checked" : "") + ">Turn off access</label>") +
           '<div class="btn-row"><button class="btn" data-action="user-edit" data-email="' + esc(u.email) + '">Edit</button><button class="btn" data-action="user-password" data-email="' + esc(u.email) + '">Reset password</button>' +
@@ -3973,7 +3998,7 @@
         sel.addEventListener("change", function () {
           var nu = JSON.parse(JSON.stringify(findU(sel.getAttribute("data-user-role"))));
           nu.role = sel.value;
-          if (nu.role !== "user") { nu.can_edit_shop = false; nu.can_review_invoices = false; }
+          if (!roleHasPerms(nu.role)) { nu.can_edit_shop = false; nu.can_review_invoices = false; }
           if (nu.role === "admin") nu.divisions = [];
           saveU(nu);
         });
@@ -4194,7 +4219,7 @@
     },
     "catalog-edit": function (el) {
       var it = BY_KEY[el.getAttribute("data-key")];
-      if (!it || it.jobOnly || !isAdmin()) return;
+      if (!it || it.jobOnly || !canEditItem(it)) return;
       if (!Cloud.enabled || !navigator.onLine) { toast("Connect to the internet to edit products"); return; }
       var units = CAT.units.slice().sort(), o = it.orig;
       if (units.indexOf(it.unit) < 0) units.push(it.unit);

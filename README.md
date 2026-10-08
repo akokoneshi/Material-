@@ -100,7 +100,10 @@ default the requester's divisions (or the job's), so a Division 100 addition to 
 to GIC are shared by every division. The admin can change the divisions when approving or editing the item.
 
 **User types** (Users & Permissions):
-- **Admin**: everything, every division.
+- **Company admin**: everything, every division.
+- **Division admin**: a regular user for their divisions, who also approves price-list requests from their divisions and
+  adds / edits price-list items for them (items they add go to their divisions; GIC items to everyone). Users, jobs,
+  special pricing and company settings stay with company admins.
 - **Regular user**: creates orders; reviews invoices and/or edits shop stock when those boxes are ticked.
 - **Field view**: creates orders and looks at shop stock. Never sees prices (their orders go out without pricing), and has no
   price lookup, invoices, special pricing or shop changes.

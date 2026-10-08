@@ -2,7 +2,8 @@
 -- Run AFTER schema.sql, shop.sql, invoices.sql and catalog.sql: Dashboard > SQL Editor > New query > paste this file > Run. Safe to re-run.
 --
 -- User types (app_users.role):
---   admin - everything, every division.
+--   admin     - company admin: everything, every division.
+--   div_admin - division admin: like a regular user in their divisions, and approves / adds price-list items for them.
 --   user  - creates orders; reviews invoices / edits shop stock if those are ticked. Sees only their divisions' jobs.
 --   field - creates orders and looks at shop stock. Nothing else. Sees only their divisions' jobs.
 -- Orders: a user with no divisions assigned is not limited, and until the jobs list has at least one job no one is limited.
@@ -24,7 +25,7 @@ create index if not exists jobs_division_idx on public.jobs (division);
 alter table public.app_users add column if not exists divisions text[] not null default '{}';
 alter table public.app_users add column if not exists phone text;
 alter table public.app_users drop constraint if exists app_users_role_check;
-alter table public.app_users add constraint app_users_role_check check (role in ('admin', 'user', 'field'));
+alter table public.app_users add constraint app_users_role_check check (role in ('admin', 'div_admin', 'user', 'field'));
 
 -- Invoices remember their job #, so they can be limited by division even without a matched order.
 alter table public.invoices add column if not exists job_number text;
@@ -52,13 +53,13 @@ $$;
 create or replace function public.can_edit_shop() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from app_users where email = current_email() and not blocked
-                 and (role = 'admin' or (role = 'user' and can_edit_shop)))
+                 and (role = 'admin' or (role in ('user', 'div_admin') and can_edit_shop)))
 $$;
 
 create or replace function public.can_review_invoices() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from app_users where email = current_email() and not blocked
-                 and (role = 'admin' or (role = 'user' and can_review_invoices)))
+                 and (role = 'admin' or (role in ('user', 'div_admin') and can_review_invoices)))
 $$;
 
 -- Invoice visibility (non-admins): its job (stored, or from the matched order) must be in the person's divisions.
@@ -158,12 +159,49 @@ create policy "divisions write" on public.divisions for all to authenticated usi
 create policy "supplier divisions read"  on public.supplier_divisions for select to authenticated using (not is_blocked());
 create policy "supplier divisions write" on public.supplier_divisions for all to authenticated using (is_admin()) with check (is_admin());
 
+-- Division admins: approve price-list requests and add / edit price-list items for their own divisions.
+create or replace function public.is_div_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from app_users where email = current_email() and role = 'div_admin' and not blocked
+                 and cardinality(divisions) > 0)
+$$;
+-- A request belongs to the job's division, or else to the requester's divisions.
+create or replace function public.request_in_my_divisions(p_job text, p_requester text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(job_division(p_job) = any(my_divisions()), false)
+      or (job_division(p_job) is null and exists (select 1 from app_users where email = lower(coalesce(p_requester, '')) and divisions && my_divisions()))
+$$;
+-- A division admin may write an added item (KIM-…) for their own divisions, or a company-wide one for a shared supplier (e.g. GIC).
+create or replace function public.div_admin_can_write_item(p_id text, p_supplier text, p_divisions text[]) returns boolean
+language sql stable security definer set search_path = public as $$
+  select is_div_admin() and p_id like 'KIM-%' and (
+    (cardinality(p_divisions) > 0 and p_divisions <@ my_divisions()
+       and p_divisions <@ coalesce(nullif((select divisions from supplier_divisions where supplier = p_supplier), '{}'), p_divisions))
+    or (cardinality(p_divisions) = 0 and cardinality(coalesce((select divisions from supplier_divisions where supplier = p_supplier), '{}')) = 0))
+$$;
+
 -- Items added to a supplier's price list (approved requests, items added from invoices) belong to divisions:
 -- people only get the ones for their divisions. Empty = every division (GIC items, and admin edits of regular items).
 alter table public.catalog_items add column if not exists divisions text[] not null default '{}';
 drop policy if exists "catalog items read" on public.catalog_items;
 create policy "catalog items read" on public.catalog_items for select to authenticated
   using (not is_blocked() and (is_admin() or cardinality(divisions) = 0 or cardinality(my_divisions()) = 0 or divisions && my_divisions()));
+drop policy if exists "catalog items write"  on public.catalog_items;
+drop policy if exists "catalog items update" on public.catalog_items;
+create policy "catalog items write" on public.catalog_items for insert to authenticated
+  with check (is_admin() or div_admin_can_write_item(id, supplier, divisions));
+create policy "catalog items update" on public.catalog_items for update to authenticated
+  using (is_admin() or div_admin_can_write_item(id, supplier, divisions))
+  with check (is_admin() or div_admin_can_write_item(id, supplier, divisions));
+
+-- Price-list requests: company admins see all; division admins see their divisions' requests.
+drop policy if exists "catalog requests read"   on public.catalog_requests;
+drop policy if exists "catalog requests update" on public.catalog_requests;
+create policy "catalog requests read" on public.catalog_requests for select to authenticated
+  using (is_admin() or (is_div_admin() and request_in_my_divisions(job_number, requested_by)));
+create policy "catalog requests update" on public.catalog_requests for update to authenticated
+  using (is_admin() or (is_div_admin() and request_in_my_divisions(job_number, requested_by)))
+  with check (is_admin() or (is_div_admin() and request_in_my_divisions(job_number, requested_by)));
 
 -- ---------------------------------------------------------------- policies
 alter table public.jobs enable row level security;
